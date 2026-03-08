@@ -1,0 +1,26 @@
+# Data & Exchange
+ccxt==4.3.89
+pandas==2.2.2
+numpy==1.26.4
+
+# Technical Analysis
+ta==0.11.0
+
+# Telegram
+python-telegram-bot==21.3
+
+# Scheduling
+APScheduler==3.10.4
+
+# Configuration
+python-dotenv==1.0.1
+
+# Timezone
+pytz==2024.1
+
+# Async support (required by python-telegram-bot v21)
+httpx==0.27.0
+
+# Testing
+pytest==8.2.2
+pytest-asyncio==0.23.7
