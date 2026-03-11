@@ -31,10 +31,29 @@ TRADING_PAIRS: list[str] = [p.strip() for p in _raw_pairs.split(",")]
 # Perpetual symbol map: BTC/USDT -> BTC/USDT:USDT
 PERP_PAIRS: list[str] = [f"{p}:USDT" for p in TRADING_PAIRS]
 
-# Top 10 by market cap — for scalping
+# Top 15 liquid pairs — for swing (clean structure, high liquidity)
+SWING_PAIRS: list[str] = [
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT", "TRX/USDT",
+    "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT", "APT/USDT",
+]
+
+# Top 20 liquid pairs — for intraday
+INTRADAY_PAIRS: list[str] = [
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
+    "TRX/USDT", "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT",
+    "ARB/USDT", "NEAR/USDT", "APT/USDT", "OP/USDT", "SUI/USDT",
+]
+
+# Top 30 liquid pairs — for scalping (more variety = more zone opportunities)
 SCALP_PAIRS: list[str] = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
     "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
+    "TRX/USDT", "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT",
+    "ARB/USDT", "NEAR/USDT", "APT/USDT", "OP/USDT", "SUI/USDT",
+    "INJ/USDT", "FIL/USDT", "HBAR/USDT", "ETC/USDT", "AAVE/USDT",
+    "XLM/USDT", "ICP/USDT", "VET/USDT", "SAND/USDT", "MANA/USDT",
 ]
 
 TIMEFRAMES: dict[str, str] = {
@@ -63,10 +82,10 @@ MARKET_UPDATE_HOURS: int = int(_get_env("MARKET_UPDATE_HOURS", 4))
 DEFAULT_CAPITAL: float = float(_get_env("DEFAULT_CAPITAL", 1_000_000))
 RISK_PER_TRADE_PERCENT: float = float(_get_env("RISK_PER_TRADE_PERCENT", 1))
 MAX_LEVERAGE: int = int(_get_env("MAX_LEVERAGE", 3))
-MIN_RR_RATIO: float = float(_get_env("MIN_RR_RATIO", 3.0))
+MIN_RR_RATIO: float = float(_get_env("MIN_RR_RATIO", 2.0))
 
 # ── Alert thresholds ─────────────────────────────────────────────────────────
-MIN_CONFIDENCE_SCORE: int = int(_get_env("MIN_CONFIDENCE_SCORE", 4))
+MIN_CONFIDENCE_SCORE: int = int(_get_env("MIN_CONFIDENCE_SCORE", 3))
 
 # ── Timezone ──────────────────────────────────────────────────────────────────
 TIMEZONE: str = _get_env("TIMEZONE", "Asia/Jakarta")
@@ -98,12 +117,13 @@ STRATEGIES: list[dict] = [
         "htf_tfs": ["1d", "4h", "1h"],   # all must align
         "ob_tf": "4h",                     # OB/FVG detected on this TF
         "entry_tf": "15m",                 # user watches this TF for confirmation
-        "pairs": TRADING_PAIRS,
+        "pairs": SWING_PAIRS,
         "scan_interval_minutes": 15,
-        "min_confidence": 4,
-        "min_rr": 3.0,
+        "min_confidence": 3,
+        "min_rr": 2.0,
         "ob_fresh_lookback": 50,
         "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room
+        "min_sl_pct": 0.008,              # SL minimum 0.8% dari entry
     },
     {
         "name": "intraday",
@@ -112,12 +132,13 @@ STRATEGIES: list[dict] = [
         "htf_tfs": ["4h", "1h", "15m"],
         "ob_tf": "1h",
         "entry_tf": "5m",
-        "pairs": TRADING_PAIRS,
+        "pairs": INTRADAY_PAIRS,
         "scan_interval_minutes": 5,
-        "min_confidence": 4,
-        "min_rr": 2.5,
+        "min_confidence": 3,
+        "min_rr": 2.0,
         "ob_fresh_lookback": 40,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
+        "min_sl_pct": 0.006,              # SL minimum 0.6% dari entry
     },
     {
         "name": "scalp",
@@ -132,6 +153,7 @@ STRATEGIES: list[dict] = [
         "min_rr": 2.0,
         "ob_fresh_lookback": 30,
         "ob_sl_buffer": 0.005,            # 0.5% buffer — 15m OBs
+        "min_sl_pct": 0.004,              # SL minimum 0.4% dari entry
     },
 ]
 

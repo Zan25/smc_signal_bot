@@ -34,8 +34,8 @@ _DEFAULT_STRATEGY = {
     "htf_tfs": ["1d", "4h", "1h"],
     "ob_tf": "4h",
     "entry_tf": "15m",
-    "min_confidence": 4,
-    "min_rr": 3.0,
+    "min_confidence": 3,
+    "min_rr": 2.0,
     "ob_fresh_lookback": 50,
 }
 
@@ -284,9 +284,9 @@ def analyze_pair(
         logger.info(f"{symbol}: Score {score} < {min_confidence} — skipping")
         return setups
 
-    # Scalp & intraday require OB — no OB = no precise entry zone
-    if strategy["name"] in ("scalp", "intraday") and ob_match is None:
-        logger.info(f"{symbol}: {strategy['name'].capitalize()} requires OB — none found, skipping")
+    # Scalp & intraday require OB or FVG — need a precise structural zone
+    if strategy["name"] in ("scalp", "intraday") and ob_match is None and fvg_match is None:
+        logger.info(f"{symbol}: {strategy['name'].capitalize()} requires OB or FVG — none found, skipping")
         return setups
 
     # Swing requires at least OB or FVG
@@ -295,26 +295,47 @@ def analyze_pair(
         return setups
 
     # ── 9. Entry / SL / TP ───────────────────────────────────────────────────
+    # Entry zone uses CE (Consequent Encroachment) — the half of the OB/FVG
+    # that price enters first, making the displayed range tighter and more precise.
+    # LONG: price drops into OB from above → upper half (midpoint → zone_high)
+    # SHORT: price rises into OB from below → lower half (zone_low → midpoint)
+    # SL is still calculated from the full zone edges (unchanged).
     if ob_match:
         entry = ob_match["midpoint"]
-        entry_low = ob_match["zone_low"]
-        entry_high = ob_match["zone_high"]
+        entry_low = ob_match["midpoint"] if is_long else ob_match["zone_low"]
+        entry_high = ob_match["zone_high"] if is_long else ob_match["midpoint"]
+        _sl_zone_low = ob_match["zone_low"]
+        _sl_zone_high = ob_match["zone_high"]
     elif fvg_match:
         entry = fvg_match["midpoint"]
-        entry_low = fvg_match["zone_low"]
-        entry_high = fvg_match["zone_high"]
+        entry_low = fvg_match["midpoint"] if is_long else fvg_match["zone_low"]
+        entry_high = fvg_match["zone_high"] if is_long else fvg_match["midpoint"]
+        _sl_zone_low = fvg_match["zone_low"]
+        _sl_zone_high = fvg_match["zone_high"]
     else:
         entry = current_price
         entry_low = current_price * (1 - 0.003)
         entry_high = current_price * (1 + 0.003)
+        _sl_zone_low = entry_low
+        _sl_zone_high = entry_high
 
     ob_sl_buffer = strategy.get("ob_sl_buffer", OB_BUFFER_PCT)
     if ob_match:
         sl = ob_match["zone_low"] * (1 - ob_sl_buffer) if is_long else ob_match["zone_high"] * (1 + ob_sl_buffer)
-    else:
-        # Use 1×ATR for SL — adapts to market volatility instead of fixed %
+    elif fvg_match:
+        # FVG SL: place outside the FVG zone + buffer (same logic as OB)
+        # Also enforce minimum 1.5×ATR so SL is never too tight
         atr_val = float(atr_ob.iloc[-1]) if not atr_ob.empty and not pd.isna(atr_ob.iloc[-1]) else entry * 0.015
-        sl = entry - 1.5 * atr_val if is_long else entry + 1.5 * atr_val
+        fvg_sl = fvg_match["zone_low"] * (1 - ob_sl_buffer) if is_long else fvg_match["zone_high"] * (1 + ob_sl_buffer)
+        atr_sl = entry - 1.5 * atr_val if is_long else entry + 1.5 * atr_val
+        # Take the wider of the two (more conservative SL)
+        sl = min(fvg_sl, atr_sl) if is_long else max(fvg_sl, atr_sl)
+    else:
+        # No structural zone — use 1.5×ATR with minimum 0.5% of price
+        atr_val = float(atr_ob.iloc[-1]) if not atr_ob.empty and not pd.isna(atr_ob.iloc[-1]) else entry * 0.015
+        min_sl_dist = entry * 0.005
+        sl_dist = max(1.5 * atr_val, min_sl_dist)
+        sl = entry - sl_dist if is_long else entry + sl_dist
 
     # TP reference = outer edge of entry zone so TP is always outside the zone
     tp_reference = entry_high if is_long else entry_low
@@ -323,7 +344,25 @@ def analyze_pair(
         logger.info(f"{symbol}: Could not determine TP levels — skipping")
         return setups
 
-    # ── 10. Validate RR ──────────────────────────────────────────────────────
+    # ── 10. Validate SL position and distance ────────────────────────────────
+    # SL must be OUTSIDE the full zone (use _sl_zone, not CE entry_low/high)
+    if is_long and sl >= _sl_zone_low:
+        logger.info(f"{symbol}: SL {sl:.6f} inside full zone [{_sl_zone_low:.6f}-{_sl_zone_high:.6f}] — fixing")
+        sl = _sl_zone_low * (1 - strategy.get("ob_sl_buffer", OB_BUFFER_PCT))
+    elif not is_long and sl <= _sl_zone_high:
+        logger.info(f"{symbol}: SL {sl:.6f} inside full zone [{_sl_zone_low:.6f}-{_sl_zone_high:.6f}] — fixing")
+        sl = _sl_zone_high * (1 + strategy.get("ob_sl_buffer", OB_BUFFER_PCT))
+
+    # SL must meet minimum distance from entry
+    sl_dist_pct = abs(entry - sl) / entry
+    min_sl_pct = strategy.get("min_sl_pct", 0.005)  # default 0.5%
+    if sl_dist_pct < min_sl_pct:
+        logger.info(
+            f"{symbol}: SL too tight ({sl_dist_pct*100:.2f}% < {min_sl_pct*100:.1f}%) — skipping"
+        )
+        return setups
+
+    # ── 11. Validate RR ──────────────────────────────────────────────────────
     is_valid, rr_tp1, rr_tp2 = risk_manager.validate_setup(
         entry, sl, tp1, tp2, htf_direction, min_rr=min_rr
     )
