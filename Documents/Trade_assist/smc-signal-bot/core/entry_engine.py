@@ -249,6 +249,9 @@ def analyze_pair(
     if ob_match is not None:
         score += 1
 
+    if fvg_match is not None:
+        score += 1
+
     fvg_overlap = False
     if ob_match and fvg_match:
         ob_zone = (ob_match["zone_low"], ob_match["zone_high"])
@@ -273,7 +276,7 @@ def analyze_pair(
 
     logger.info(
         f"[{strategy['name'].upper()}] {symbol} {htf_direction.upper()}: "
-        f"score={score}/7, ob={'yes' if ob_match else 'no'}, "
+        f"score={score}/8, ob={'yes' if ob_match else 'no'}, "
         f"fvg={'yes' if fvg_match else 'no'}, zone={pd_result['zone']}({pos:.0f}%), "
         f"liq={liq_near}, "
         f"bos={'yes' if bos_ob and bos_ob.get('direction')==htf_direction else 'no'}, "
