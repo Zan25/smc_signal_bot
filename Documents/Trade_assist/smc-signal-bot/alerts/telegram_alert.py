@@ -104,7 +104,7 @@ class TelegramAlerter:
         dir_label = "LONG" if is_long else "SHORT"
 
         confidence = setup["confidence"]
-        max_score = 7
+        max_score = 8
         stars = "⭐" * min(confidence, max_score) + "☆" * max(0, max_score - confidence)
 
         reasons_text = "\n".join(f"• {r}" for r in setup["reasons"])
@@ -128,12 +128,12 @@ class TelegramAlerter:
         strategy_label = setup.get("strategy_label", "")
 
         msg = (
-            f"{emoji} *{setup['symbol']} {dir_label}* {strategy_emoji} [{strategy_label}]\n"
+            f"{emoji} *{setup['symbol']} {dir_label}* {strategy_emoji} {strategy_label}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 Entry: `{fmt(setup['entry_low'])} - {fmt(setup['entry_high'])}`\n"
             f"🛑 SL: `{fmt(setup['sl'])}`\n"
-            f"✅ TP1: `{fmt(setup['tp1'])}` | TP2: `{fmt(setup['tp2'])}`\n"
-            f"📐 RR: *1:{setup['rr_tp2']:.1f}* | {stars} {confidence}/7\n"
+            f"✅ TP1: `{fmt(setup['tp1'])}` TP2: `{fmt(setup['tp2'])}`\n"
+            f"📐 RR: *1:{setup['rr_tp2']:.1f}* {stars} {confidence}/{max_score}\n"
             f"📈 Trend: {setup['htf_trend']}\n"
             f"📋 {reasons_text}\n"
             f"⏰ {ts_str}"
