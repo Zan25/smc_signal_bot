@@ -6,6 +6,8 @@ Initializes all modules and runs the APScheduler for periodic scanning.
 import sys
 import signal
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Windows asyncio fix (must be before any asyncio/telegram imports) ─────────
 if sys.platform == "win32":
@@ -41,6 +43,27 @@ _fetcher: DataFetcher | None = None
 _alerter: TelegramAlerter | None = None
 _scheduler: BlockingScheduler | None = None
 _cmd_handler: TelegramCommandHandler | None = None
+
+
+# ── Health check HTTP server (keeps Railway happy & allows uptime monitoring) ──
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, *args):
+        pass  # suppress access logs
+
+
+def _start_health_server(port: int = 8080) -> None:
+    try:
+        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True, name="HealthCheck")
+        t.start()
+        logger.info(f"Health check server started on port {port}")
+    except Exception as e:
+        logger.warning(f"Could not start health server: {e}")
 
 
 # ─── Scan jobs ─────────────────────────────────────────────────────────────────
@@ -218,7 +241,7 @@ def main() -> None:
             minutes=strat["scan_interval_minutes"],
             id=f"scan_{strat['name']}",
             name=f"{strat['label']} Scanner",
-            misfire_grace_time=60,
+            misfire_grace_time=300,
             max_instances=1,
         )
         logger.info(
@@ -241,14 +264,16 @@ def main() -> None:
     logger.info(f"Watching: {', '.join(TRADING_PAIRS)}")
     logger.info("Bot is running. Press Ctrl+C to stop.")
 
-    # Run the first scan immediately before scheduler kicks in
-    try:
-        scan_swing()
-        scan_intraday()
-        scan_scalp()
-        send_market_update()
-    except Exception as e:
-        logger.error(f"Initial scan failed: {e}", exc_info=True)
+    # Start health check HTTP server (port 8080 for Railway uptime monitoring)
+    _start_health_server(port=8080)
+
+    # Run the first scan immediately — each isolated so one failure won't block others
+    for fn, name in [(scan_swing, "swing"), (scan_intraday, "intraday"),
+                     (scan_scalp, "scalp"), (send_market_update, "market_update")]:
+        try:
+            fn()
+        except Exception as e:
+            logger.error(f"Initial {name} scan failed: {e}", exc_info=True)
 
     # Start blocking scheduler
     try:
