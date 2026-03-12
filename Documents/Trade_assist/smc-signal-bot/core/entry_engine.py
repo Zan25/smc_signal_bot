@@ -165,34 +165,11 @@ def analyze_pair(
     trends = {tf: structs[tf]["trend"] for tf in htf_tfs}
 
     # ── 3. Check N-way TF alignment ───────────────────────────────────────────
-    # Rule: dominant HTF (highest TF) must have a clear bias (not ranging).
-    # Lower TFs may be ranging (consolidation) but must NOT be opposite to bias.
-    # Minimum 2 of N TFs must actively confirm the direction.
     top_tf = htf_tfs[0]
     top_trend = trends[top_tf]
+    is_ranging_market = False
 
-    if top_trend == "ranging":
-        logger.info(f"{symbol}: Dominant TF {top_tf} is ranging — skipping")
-        return []
-
-    htf_direction = top_trend
-
-    # Reject if any lower TF is opposite to bias
-    for tf in htf_tfs[1:]:
-        if trends[tf] != "ranging" and trends[tf] != htf_direction:
-            trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
-            logger.info(f"{symbol}: TF conflict ({trend_desc}) — skipping")
-            return []
-
-    # Require at least (N-1) TFs to actively confirm (ranging TFs don't count)
-    confirmations = sum(1 for t in trends.values() if t == htf_direction)
-    min_confirmations = max(1, len(htf_tfs) - 1)
-    if confirmations < min_confirmations:
-        trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
-        logger.info(f"{symbol}: Weak TF alignment ({trend_desc}, {confirmations}/{len(htf_tfs)} confirm) — skipping")
-        return []
-
-    # ── 4. Premium / Discount zone from ob_tf ────────────────────────────────
+    # ── 4. Premium / Discount zone from ob_tf (needed for ranging direction) ──
     struct_ob = structs[ob_tf]
     sh_ob = struct_ob.get("last_swing_high")
     sl_ob = struct_ob.get("last_swing_low")
@@ -202,6 +179,39 @@ def analyze_pair(
         return []
 
     pd_result = premium_discount.calculate(sh_ob, sl_ob, current_price)
+
+    if top_trend == "ranging":
+        # Range trading mode: use price position in range to determine bias.
+        # Only trade at extremes (bottom 35% = long, top 35% = short).
+        pos_temp = pd_result["position_pct"]
+        if pos_temp < 35.0:
+            htf_direction = "bullish"
+            is_ranging_market = True
+            logger.info(f"{symbol}: Ranging {top_tf}, price at range bottom ({pos_temp:.0f}%) — trying LONG")
+        elif pos_temp > 65.0:
+            htf_direction = "bearish"
+            is_ranging_market = True
+            logger.info(f"{symbol}: Ranging {top_tf}, price at range top ({pos_temp:.0f}%) — trying SHORT")
+        else:
+            logger.info(f"{symbol}: Dominant TF {top_tf} is ranging, price at midpoint ({pos_temp:.0f}%) — skipping")
+            return []
+    else:
+        htf_direction = top_trend
+
+        # Reject if any lower TF is opposite to bias
+        for tf in htf_tfs[1:]:
+            if trends[tf] != "ranging" and trends[tf] != htf_direction:
+                trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
+                logger.info(f"{symbol}: TF conflict ({trend_desc}) — skipping")
+                return []
+
+        # Require at least (N-1) TFs to actively confirm (ranging TFs don't count)
+        confirmations = sum(1 for t in trends.values() if t == htf_direction)
+        min_confirmations = max(1, len(htf_tfs) - 1)
+        if confirmations < min_confirmations:
+            trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
+            logger.info(f"{symbol}: Weak TF alignment ({trend_desc}, {confirmations}/{len(htf_tfs)} confirm) — skipping")
+            return []
 
     # ── 5. ATR + OBs + FVGs + Liquidity on ob_tf ─────────────────────────────
     atr_ob = df_module.compute_atr(df_ob)
@@ -294,14 +304,14 @@ def analyze_pair(
         logger.info(f"{symbol}: Score {score} < {min_confidence} — skipping")
         return setups
 
-    # Scalp & intraday require OB or FVG — need a precise structural zone
-    if strategy["name"] in ("scalp", "intraday") and ob_match is None and fvg_match is None:
-        logger.info(f"{symbol}: {strategy['name'].capitalize()} requires OB or FVG — none found, skipping")
+    # All strategies require OB or FVG as a structural entry zone
+    if ob_match is None and fvg_match is None:
+        logger.info(f"{symbol}: Requires OB or FVG — none found, skipping")
         return setups
 
-    # Swing requires at least OB or FVG
-    if strategy["name"] == "swing" and ob_match is None and fvg_match is None:
-        logger.info(f"{symbol}: Swing requires OB or FVG — none found, skipping")
+    # Ranging markets require OB (more precise zone needed — FVG alone not enough)
+    if is_ranging_market and ob_match is None:
+        logger.info(f"{symbol}: Ranging market requires OB — none found, skipping")
         return setups
 
     # ── 9. Entry / SL / TP ───────────────────────────────────────────────────
@@ -389,6 +399,8 @@ def analyze_pair(
     htf_trend_str = " | ".join(
         f"{tf.upper()}: {trends[tf].capitalize()}" for tf in htf_tfs
     )
+    if is_ranging_market:
+        htf_trend_str = f"RANGE TRADE | {htf_trend_str}"
     # Entry TF display: "4H OB → 15m entry" style
     timeframe_entry_label = f"{ob_tf.upper()} OB → {entry_tf} konfirmasi"
 
