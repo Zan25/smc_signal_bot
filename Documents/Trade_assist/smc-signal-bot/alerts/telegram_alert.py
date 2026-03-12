@@ -84,11 +84,12 @@ class TelegramAlerter:
 
     def send_startup_message(self, pairs: list[str]) -> bool:
         """Send bot startup notification."""
-        pairs_str = ", ".join(pairs)
         msg = (
-            f"🤖 *SMC Signal Bot Started*\n"
+            f"🤖 *SMC Signal Bot Started* v2.0\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Scanning: `{pairs_str}`\n"
+            f"📊 {len(pairs)} pairs dipantau\n"
+            f"✅ Range trading mode: ON\n"
+            f"✅ Threshold: score 3/8, RR 1:2\n"
             f"⏰ {datetime.now(tz=_WIB).strftime('%Y-%m-%d %H:%M %Z')}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Bot aktif dan siap mengirim signal!"
