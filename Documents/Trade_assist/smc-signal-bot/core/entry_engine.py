@@ -218,20 +218,21 @@ def analyze_pair(
     ob_list = obs_ob["bullish"] if is_long else obs_ob["bearish"]
     fvg_list = fvgs_ob["bullish"] if is_long else fvgs_ob["bearish"]
 
-    # Find matching OB: strictly inside zone + freshness filter
+    # Find matching OB: inside zone OR approaching within 1% — freshness filter
     ob_match = None
     for ob in ob_list:
         ob_age = len(df_ob) - 1 - ob.get("index", 0)
         if ob_age > ob_fresh_lookback:
             continue
-        if ob["zone_low"] <= current_price <= ob["zone_high"]:
+        if order_blocks.is_price_in_ob(current_price, ob, tolerance=0.01):
             ob_match = ob
             break
 
-    # Find matching FVG: price strictly inside zone
+    # Find matching FVG: price inside or within 0.5% of zone edges
     fvg_match = None
     for fv in fvg_list:
-        if fv["zone_low"] <= current_price <= fv["zone_high"]:
+        fvg_tol = (fv["zone_high"] - fv["zone_low"]) * 0.005 + fv["zone_low"] * 0.005
+        if fv["zone_low"] - fvg_tol <= current_price <= fv["zone_high"] + fvg_tol:
             fvg_match = fv
             break
 
@@ -239,11 +240,11 @@ def analyze_pair(
     score = 0
     score += 1  # TF alignment confirmed
 
-    # Deep zone only: long needs price in bottom 30%, short in top 30%
+    # Zone bonus: long needs price in bottom 40%, short in top 40%
     pos = pd_result["position_pct"]
-    if is_long and pos < 30.0:
+    if is_long and pos < 40.0:
         score += 1
-    elif not is_long and pos > 70.0:
+    elif not is_long and pos > 60.0:
         score += 1
 
     if ob_match is not None:
@@ -269,18 +270,24 @@ def analyze_pair(
     if bos_ob and bos_ob.get("direction") == htf_direction:
         score += 1
 
-    # CHoCH on ob_tf = early reversal signal in trade direction (first sign of smart money entry)
-    choch_ob = struct_ob.get("last_choch")
-    if choch_ob and choch_ob.get("direction") == htf_direction:
-        score += 1
-
+    # CHoCH on entry_tf = early reversal signal (price starting to reverse on lower TF)
+    # Checks entry_tf (e.g. 15m/5m) for first sign of smart money reversal in trade direction
+    df_entry = mtf_data.get(entry_tf)
+    struct_entry = None
+    choch_entry_hit = False
+    if df_entry is not None and len(df_entry) >= 10:
+        struct_entry = market_structure.analyze(df_entry)
+        choch_entry = struct_entry.get("last_choch")
+        if choch_entry and choch_entry.get("direction") == htf_direction:
+            score += 1
+            choch_entry_hit = True
     logger.info(
         f"[{strategy['name'].upper()}] {symbol} {htf_direction.upper()}: "
         f"score={score}/8, ob={'yes' if ob_match else 'no'}, "
         f"fvg={'yes' if fvg_match else 'no'}, zone={pd_result['zone']}({pos:.0f}%), "
         f"liq={liq_near}, "
         f"bos={'yes' if bos_ob and bos_ob.get('direction')==htf_direction else 'no'}, "
-        f"choch={'yes' if choch_ob and choch_ob.get('direction')==htf_direction else 'no'}"
+        f"choch_entry={'yes' if choch_entry_hit else 'no'}"
     )
 
     if score < min_confidence:

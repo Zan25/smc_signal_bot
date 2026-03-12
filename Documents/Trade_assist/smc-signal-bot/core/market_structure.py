@@ -55,11 +55,13 @@ def _get_confirmed_swings(swing_series: pd.Series, last_n: int = 5) -> list[floa
 
 def determine_trend(swing_highs: pd.Series, swing_lows: pd.Series) -> str:
     """
-    Determine market trend based on swing structure.
+    Determine market trend based on swing structure using majority vote.
 
-    Bullish: Higher Highs (HH) and Higher Lows (HL)
-    Bearish: Lower Highs (LH) and Lower Lows (LL)
-    Ranging: Mixed structure
+    Uses last 3 confirmed swings (2 consecutive pairs each) and counts
+    bullish vs bearish signals. Majority wins; tie = ranging.
+
+    Bullish signal: Higher High (HH) or Higher Low (HL)
+    Bearish signal: Lower High (LH) or Lower Low (LL)
 
     Args:
         swing_highs: Series of confirmed swing highs
@@ -68,21 +70,30 @@ def determine_trend(swing_highs: pd.Series, swing_lows: pd.Series) -> str:
     Returns:
         'bullish', 'bearish', or 'ranging'
     """
-    highs = _get_confirmed_swings(swing_highs, last_n=2)
-    lows = _get_confirmed_swings(swing_lows, last_n=2)
+    highs = _get_confirmed_swings(swing_highs, last_n=3)
+    lows = _get_confirmed_swings(swing_lows, last_n=3)
 
     if len(highs) < 2 or len(lows) < 2:
         return "ranging"
 
-    # Check most recent swing pair only (last SH vs previous SH, last SL vs previous SL)
-    hh = highs[-1] > highs[-2]
-    hl = lows[-1] > lows[-2]
-    lh = highs[-1] < highs[-2]
-    ll = lows[-1] < lows[-2]
+    bull_count = 0
+    bear_count = 0
 
-    if hh and hl:
+    for i in range(1, len(highs)):
+        if highs[i] > highs[i - 1]:
+            bull_count += 1
+        elif highs[i] < highs[i - 1]:
+            bear_count += 1
+
+    for i in range(1, len(lows)):
+        if lows[i] > lows[i - 1]:
+            bull_count += 1
+        elif lows[i] < lows[i - 1]:
+            bear_count += 1
+
+    if bull_count > bear_count:
         return "bullish"
-    if lh and ll:
+    elif bear_count > bull_count:
         return "bearish"
     return "ranging"
 
