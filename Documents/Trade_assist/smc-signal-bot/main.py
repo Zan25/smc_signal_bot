@@ -7,6 +7,7 @@ import sys
 import signal
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Windows asyncio fix (must be before any asyncio/telegram imports) ─────────
@@ -74,40 +75,52 @@ def _start_health_server(port: int = 8080) -> None:
 
 # ─── Scan jobs ─────────────────────────────────────────────────────────────────
 
+def _scan_pair(display_sym: str, perp_sym: str, strategy: dict) -> tuple:
+    """Fetch + analyze a single pair. Run in parallel by ThreadPoolExecutor."""
+    try:
+        mtf_data = _fetcher.fetch_for_strategy(perp_sym, strategy)
+        failed = [tf for tf, df in mtf_data.items() if df is None]
+        if failed:
+            logger.warning(f"{display_sym}: Missing TF {failed} — skipping")
+            return display_sym, []
+        return display_sym, entry_engine.analyze_pair(display_sym, mtf_data, strategy)
+    except Exception as e:
+        logger.error(f"Error scanning {display_sym} ({strategy['name']}): {e}", exc_info=True)
+        return display_sym, []
+
+
 def _scan_strategy(strategy: dict) -> None:
-    """Scan all pairs for a given strategy."""
+    """Scan all pairs for a given strategy in parallel (4 workers)."""
     pairs = strategy["pairs"]
     perp_pairs = [f"{p}:USDT" for p in pairs]
-    logger.info(f"=== [{strategy['name'].upper()}] Scan started ({len(pairs)} pairs) ===")
+    strat_name = strategy["name"].upper()
+    logger.info(f"=== [{strat_name}] Scan dimulai ({len(pairs)} pair, parallel) ===")
 
-    for display_sym, perp_sym in zip(pairs, perp_pairs):
-        try:
-            mtf_data = _fetcher.fetch_for_strategy(perp_sym, strategy)
-
-            failed = [tf for tf, df in mtf_data.items() if df is None]
-            if failed:
-                logger.warning(f"{display_sym}: Missing data {failed} — skipping")
-                continue
-
-            setups = entry_engine.analyze_pair(display_sym, mtf_data, strategy)
+    signals_sent = 0
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan") as executor:
+        futures = {
+            executor.submit(_scan_pair, sym, perp, strategy): sym
+            for sym, perp in zip(pairs, perp_pairs)
+        }
+        for future in as_completed(futures):
+            sym, setups = future.result()
             for setup in setups:
-                _alerter.send_signal_alert(setup)
-                # Paper trading: simulate entry from this signal
+                sent = _alerter.send_signal_alert(setup)
+                if not sent:
+                    logger.warning(f"[ALERT] Gagal kirim sinyal {sym} ke Telegram")
+                else:
+                    signals_sent += 1
                 if PAPER_TRADING_ENABLED and _paper_trader is not None:
                     try:
                         position = _paper_trader.open_position(setup)
                         if position:
-                            # Attach current balance to position for notification
                             status = _paper_trader.get_status()
                             position["balance_at_open"] = f"{status['balance']:.2f}"
                             _alerter.send_paper_entry(position)
                     except Exception as pe:
-                        logger.error(f"[PAPER] Error opening position for {display_sym}: {pe}")
+                        logger.error(f"[PAPER] Error open position {sym}: {pe}")
 
-        except Exception as e:
-            logger.error(f"Error scanning {display_sym} ({strategy['name']}): {e}", exc_info=True)
-
-    logger.info(f"=== [{strategy['name'].upper()}] Scan complete ===")
+    logger.info(f"=== [{strat_name}] Scan selesai — {signals_sent} sinyal dari {len(pairs)} pair ===")
 
 
 def scan_swing() -> None:
@@ -137,11 +150,41 @@ def check_paper_positions() -> None:
         logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
 
 
+def _run_forced_scan_tier(strategy: dict, needed: int, tier_label: str) -> int:
+    """Scan PAPER_FORCE_PAIRS dengan strategy tier tertentu. Return jumlah posisi dibuka."""
+    opened = 0
+    for pair in PAPER_FORCE_PAIRS:
+        if opened >= needed:
+            break
+        if len(_paper_trader._state["open_positions"]) >= PAPER_MAX_POSITIONS:
+            logger.info("[PAPER FORCED] Max posisi tercapai, berhenti")
+            break
+        try:
+            perp = f"{pair.replace('/USDT', '')}/USDT:USDT"
+            mtf_data = _fetcher.fetch_for_strategy(perp, strategy)
+            if any(df is None for df in mtf_data.values()):
+                logger.warning(f"[PAPER FORCED] [{tier_label}] {pair}: data incomplete — skip")
+                continue
+            setups = entry_engine.analyze_pair(pair, mtf_data, strategy)
+            for setup in setups:
+                position = _paper_trader.open_position(setup)
+                if position:
+                    status = _paper_trader.get_status()
+                    position["balance_at_open"] = f"{status['balance']:.2f}"
+                    _alerter.send_paper_entry(position)
+                    opened += 1
+                    logger.info(f"[PAPER FORCED] [{tier_label}] Buka {pair} {setup['direction']}")
+                    break  # 1 posisi per pair
+        except Exception as e:
+            logger.error(f"[PAPER FORCED] [{tier_label}] Error {pair}: {e}", exc_info=True)
+    return opened
+
+
 def forced_paper_scan(slot_target: int) -> None:
     """
     Wajib scan intraday di 10 pair utama jika trade hari ini < slot_target.
-    Dipanggil 3x sehari (09:00, 13:00, 18:00 WIB) untuk pastikan minimal 3 trade/hari.
-    Menggunakan threshold lebih longgar (min_confidence=2, min_rr=1.2).
+    Dipanggil 3x sehari (09:00, 13:00, 18:00 WIB) — wajib ada trade setiap hari.
+    Tier 1: conf=2, rr=1.2. Tier 2 fallback: conf=1, rr=1.0 — tidak ada hari tanpa posisi.
     """
     if not PAPER_TRADING_ENABLED or _paper_trader is None or _forced_intraday_strategy is None:
         return
@@ -153,34 +196,39 @@ def forced_paper_scan(slot_target: int) -> None:
         return
 
     logger.info(f"[PAPER FORCED] Slot {slot_target}: butuh {needed} trade lagi (ada {today_count})")
+    _alerter.send_forced_scan_start(slot_target, today_count, needed)
+
     opened = 0
 
-    for pair in PAPER_FORCE_PAIRS:
-        if opened >= needed:
-            break
-        if len(_paper_trader._state["open_positions"]) >= PAPER_MAX_POSITIONS:
-            logger.info("[PAPER FORCED] Max posisi tercapai, berhenti")
-            break
-        try:
-            perp = f"{pair.replace('/USDT', '')}/USDT:USDT"
-            mtf_data = _fetcher.fetch_for_strategy(perp, _forced_intraday_strategy)
-            failed = [tf for tf, df in mtf_data.items() if df is None]
-            if failed:
-                logger.warning(f"[PAPER FORCED] {pair}: missing TF {failed} — skip")
-                continue
-            setups = entry_engine.analyze_pair(pair, mtf_data, _forced_intraday_strategy)
-            for setup in setups:
-                position = _paper_trader.open_position(setup)
-                if position:
-                    status = _paper_trader.get_status()
-                    position["balance_at_open"] = f"{status['balance']:.2f}"
-                    _alerter.send_paper_entry(position)
-                    opened += 1
-                    break  # satu posisi per pair per slot
-        except Exception as e:
-            logger.error(f"[PAPER FORCED] Error scan {pair}: {e}", exc_info=True)
+    # ── Tier 1: threshold normal forced (htf=4h, conf=2, rr=1.2) ─────────────
+    opened += _run_forced_scan_tier(_forced_intraday_strategy, needed, "TIER-1")
 
+    # ── Tier 2 fallback: jika tier 1 kurang — conf=1, rr=1.0 ─────────────────
+    still_needed = needed - opened
+    if still_needed > 0:
+        logger.info(f"[PAPER FORCED] TIER-1 kurang ({opened}/{needed}) — coba TIER-2")
+        _tier2 = {
+            **_forced_intraday_strategy,
+            "min_confidence": 1,
+            "min_rr": 1.0,
+        }
+        opened += _run_forced_scan_tier(_tier2, still_needed, "TIER-2")
+
+    # ── Notif hasil ke Telegram ───────────────────────────────────────────────
+    status = _paper_trader.get_status()
+    _alerter.send_forced_scan_result(slot_target, opened, needed, status["balance"])
     logger.info(f"[PAPER FORCED] Slot {slot_target} selesai — buka {opened} posisi baru")
+
+
+def send_daily_summary() -> None:
+    """Kirim ringkasan aktivitas trading hari ini ke Telegram. Jalan setiap hari 23:59 WIB."""
+    if not PAPER_TRADING_ENABLED or _paper_trader is None:
+        return
+    try:
+        summary = _paper_trader.get_daily_summary()
+        _alerter.send_daily_summary(summary)
+    except Exception as e:
+        logger.error(f"[PAPER] Error daily summary: {e}", exc_info=True)
 
 
 def send_paper_monthly_recap() -> None:
@@ -385,6 +433,16 @@ def main() -> None:
             id="paper_check",
             name="Paper Position Check",
             misfire_grace_time=30,
+            max_instances=1,
+        )
+        _scheduler.add_job(
+            send_daily_summary,
+            trigger="cron",
+            hour=23,
+            minute=59,
+            id="daily_summary",
+            name="Daily Trading Summary",
+            misfire_grace_time=600,
             max_instances=1,
         )
         _scheduler.add_job(

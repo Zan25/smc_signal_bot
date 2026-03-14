@@ -256,6 +256,67 @@ class TelegramAlerter:
         )
         return self._send(msg)
 
+    def send_forced_scan_start(self, slot_target: int, today_count: int, needed: int) -> bool:
+        """Notif saat forced scan dimulai — user tahu bot sedang aktif mencari setup."""
+        slot_map = {1: "09:00", 2: "13:00", 3: "18:00"}
+        slot_time = slot_map.get(slot_target, f"Slot {slot_target}")
+        msg = (
+            f"🔍 *FORCED SCAN — {slot_time} WIB*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Trade hari ini: {today_count} | Target: {slot_target}\n"
+            f"Butuh: *{needed} posisi lagi*\n"
+            f"Scanning 10 pair utama\\.\\.\\."
+        )
+        return self._send(msg)
+
+    def send_forced_scan_result(self, slot_target: int, opened: int, needed: int, balance: float) -> bool:
+        """Notif hasil forced scan — berhasil buka berapa posisi."""
+        if opened >= needed:
+            status_emoji = "✅"
+            status_label = f"Berhasil buka *{opened}* posisi"
+        elif opened > 0:
+            status_emoji = "⚠️"
+            status_label = f"Buka *{opened}/{needed}* posisi \\(tidak penuh\\)"
+        else:
+            status_emoji = "❌"
+            status_label = "Tidak ada setup valid ditemukan"
+        msg = (
+            f"{status_emoji} *FORCED SCAN — Selesai*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{status_label}\n"
+            f"💼 Balance: *${balance:.2f}*\n"
+            f"⏰ {datetime.now(tz=_WIB).strftime('%H:%M WIB')}"
+        )
+        return self._send(msg)
+
+    def send_daily_summary(self, summary: dict) -> bool:
+        """Kirim ringkasan aktivitas trading harian jam 23:59 WIB."""
+        balance = summary["balance"]
+        initial = summary["initial_balance"]
+        roi = (balance - initial) / initial * 100 if initial > 0 else 0.0
+        roi_sign = "+" if roi >= 0 else ""
+        roi_emoji = "📈" if roi >= 0 else "📉"
+
+        opened_today = summary["total_opened_today"]
+        closed_today = summary["total_closed_today"]
+        still_open = summary["open_positions"]
+
+        msg = (
+            f"📊 *RINGKASAN HARIAN — {summary['date']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💼 Balance: *${balance:.2f}*\n"
+            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* \\(dari ${initial:.2f}\\)\n"
+            f"\n"
+            f"📋 *Trade Hari Ini:*\n"
+            f"• Total dibuka: {opened_today} posisi\n"
+            f"• Closed: {closed_today} posisi\n"
+            f"• Masih open: {still_open} posisi\n"
+            f"• Total closed semua waktu: {summary['total_closed']}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ 23:59 WIB"
+        )
+        return self._send(msg)
+
     def send_startup_message(self, pairs: list[str]) -> bool:
         """Send bot startup notification."""
         msg = (

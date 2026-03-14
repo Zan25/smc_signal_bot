@@ -184,13 +184,13 @@ def analyze_pair(
 
     if top_trend == "ranging":
         # Range trading mode: use price position in range to determine bias.
-        # Only trade at extremes (bottom 35% = long, top 35% = short).
+        # Trade at bottom 40% (long) or top 40% (short) — dead zone 40-60%.
         pos_temp = pd_result["position_pct"]
-        if pos_temp < 35.0:
+        if pos_temp < 40.0:
             htf_direction = "bullish"
             is_ranging_market = True
             logger.info(f"{symbol}: Ranging {top_tf}, price at range bottom ({pos_temp:.0f}%) — trying LONG")
-        elif pos_temp > 65.0:
+        elif pos_temp > 60.0:
             htf_direction = "bearish"
             is_ranging_market = True
             logger.info(f"{symbol}: Ranging {top_tf}, price at range top ({pos_temp:.0f}%) — trying SHORT")
@@ -200,18 +200,20 @@ def analyze_pair(
     else:
         htf_direction = top_trend
 
-        # Reject if any lower TF is opposite to bias
-        for tf in htf_tfs[1:]:
-            if trends[tf] != "ranging" and trends[tf] != htf_direction:
-                trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
-                logger.info(f"{symbol}: TF conflict ({trend_desc}) — skipping")
-                return []
+        # Allow up to 1 conflicting lower TF (1 conflict = acceptable divergence)
+        trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
+        conflicts = sum(
+            1 for tf in htf_tfs[1:]
+            if trends[tf] != "ranging" and trends[tf] != htf_direction
+        )
+        if conflicts > 1:
+            logger.info(f"{symbol}: TF multi-conflict ({trend_desc}) — skipping")
+            return []
 
-        # Require at least (N-1) TFs to actively confirm (ranging TFs don't count)
+        # Require at least (N-2) TFs to actively confirm (ranging TFs don't count)
         confirmations = sum(1 for t in trends.values() if t == htf_direction)
-        min_confirmations = max(1, len(htf_tfs) - 1)
+        min_confirmations = max(1, len(htf_tfs) - 2)
         if confirmations < min_confirmations:
-            trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
             logger.info(f"{symbol}: Weak TF alignment ({trend_desc}, {confirmations}/{len(htf_tfs)} confirm) — skipping")
             return []
 

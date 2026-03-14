@@ -443,6 +443,43 @@ class PaperTrader:
                     pass
         return count
 
+    def get_daily_summary(self) -> dict:
+        """Ambil statistik trading hari ini untuk daily summary Telegram notification."""
+        today = datetime.now(tz=_WIB).date()
+        with self._lock:
+            all_positions = self._state["open_positions"] + self._state["closed_positions"]
+            opened_today = []
+            for pos in all_positions:
+                try:
+                    opened_dt = datetime.fromisoformat(pos["opened_at"])
+                    if not opened_dt.tzinfo:
+                        opened_dt = _WIB.localize(opened_dt)
+                    if opened_dt.astimezone(_WIB).date() == today:
+                        opened_today.append(pos)
+                except Exception:
+                    pass
+
+            closed_today = []
+            for pos in self._state["closed_positions"]:
+                try:
+                    closed_dt = datetime.fromisoformat(pos.get("closed_at", pos["opened_at"]))
+                    if not closed_dt.tzinfo:
+                        closed_dt = _WIB.localize(closed_dt)
+                    if closed_dt.astimezone(_WIB).date() == today:
+                        closed_today.append(pos)
+                except Exception:
+                    pass
+
+            return {
+                "date": today.strftime("%d %b %Y"),
+                "balance": round(self._state["balance"], 2),
+                "initial_balance": round(self._state["initial_balance"], 2),
+                "total_opened_today": len(opened_today),
+                "total_closed_today": len(closed_today),
+                "open_positions": len(self._state["open_positions"]),
+                "total_closed": len(self._state["closed_positions"]),
+            }
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     @staticmethod
