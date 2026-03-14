@@ -166,6 +166,11 @@ PAPER_RISK_PCT: float = 0.05      # 5% capital per trade (agresif, leverage 10x 
 PAPER_MAX_POSITIONS: int = 3      # max posisi bersamaan — kualitas > kuantitas
 PAPER_MAX_MARGIN_PCT: float = 0.25  # max 25% balance sebagai margin per posisi
 PAPER_STATE_FILE: str = str(_BASE_DIR / "paper_state.json")
+PAPER_FORCE_PAIRS: list[str] = [          # 10 pair utama untuk forced intraday scan
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
+]
+PAPER_MIN_DAILY_TRADES: int = 3           # wajib minimal 3 trade intraday per hari
 
 
 def get_exchange() -> ccxt.gate:

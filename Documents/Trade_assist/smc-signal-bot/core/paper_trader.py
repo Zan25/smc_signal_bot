@@ -389,6 +389,22 @@ class PaperTrader:
                 "peak_balance": round(self._state["peak_balance"], 2),
             }
 
+    def get_today_count(self) -> int:
+        """Hitung posisi yang dibuka hari ini (open + closed combined)."""
+        today = datetime.now(tz=_WIB).date()
+        count = 0
+        with self._lock:
+            for pos in self._state["open_positions"] + self._state["closed_positions"]:
+                try:
+                    opened_dt = datetime.fromisoformat(pos["opened_at"])
+                    if not opened_dt.tzinfo:
+                        opened_dt = _WIB.localize(opened_dt)
+                    if opened_dt.astimezone(_WIB).date() == today:
+                        count += 1
+                except Exception:
+                    pass
+        return count
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     @staticmethod
