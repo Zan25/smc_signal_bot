@@ -318,11 +318,12 @@ def main() -> None:
         _forced_intraday_strategy = {
             **_intraday_base,
             "pairs": PAPER_FORCE_PAIRS,
+            "htf_tfs": ["4h"],     # hanya 1 TF untuk arah — bypass TF conflict 1h/15m
             "min_confidence": 2,   # lebih longgar dari normal (3)
             "min_rr": 1.2,         # lebih longgar dari normal (1.5)
             "ob_fresh_lookback": 60,
         }
-        logger.info(f"[PAPER] Forced intraday strategy ready — {len(PAPER_FORCE_PAIRS)} pairs, min_conf=2, min_rr=1.2")
+        logger.info(f"[PAPER] Forced intraday strategy ready — htf=4h only, min_conf=2, min_rr=1.2")
 
     # Send startup notification
     all_pairs = sorted(set(p for s in STRATEGIES for p in s["pairs"]))
