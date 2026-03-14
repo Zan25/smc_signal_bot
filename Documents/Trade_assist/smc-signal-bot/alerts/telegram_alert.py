@@ -138,16 +138,19 @@ class TelegramAlerter:
 
         if reason == "TP1_HIT":
             status_emoji = "🎯"
-            status_label = "TP1 HIT (50% closed)"
+            status_label = "TP1 HIT — 50% CLOSED, SL → Breakeven"
         elif reason == "TP2_HIT":
             status_emoji = "✅"
-            status_label = "TP2 HIT — FULL CLOSE"
+            status_label = "TP2 HIT — FULL CLOSE 🏆"
         elif reason == "SL_HIT_BE":
             status_emoji = "↩️"
-            status_label = "SL HIT (Breakeven)"
+            status_label = "SL HIT — Breakeven (modal aman)"
+        elif reason == "EXPIRED":
+            status_emoji = "⏳"
+            status_label = "EXPIRED — Auto Cancel"
         else:
             status_emoji = "❌"
-            status_label = "SL HIT"
+            status_label = "SL HIT — Loss"
 
         dir_emoji = "🟢" if is_long else "🔴"
         pnl = position.get("exit_pnl", 0)
@@ -182,15 +185,26 @@ class TelegramAlerter:
             ts_str = "?"
 
         balance_after = position.get("balance_after", "?")
+        strategy_map = {"swing": "📈 Swing", "intraday": "⏱️ Intraday", "scalp": "⚡ Scalping"}
+        strategy_label = strategy_map.get(position.get("strategy", ""), position.get("strategy", ""))
+
+        # For TP1 partial: note that position is still half-open
+        note_line = ""
+        if reason == "TP1_HIT":
+            note_line = f"\n📌 _Sisa 50% masih open, SL dipindah ke entry (breakeven)_"
+        elif reason == "EXPIRED":
+            max_h = {"scalp": 6, "intraday": 24, "swing": 72}.get(position.get("strategy", "intraday"), 24)
+            note_line = f"\n📌 _Posisi ditutup otomatis setelah {max_h}j tanpa TP/SL hit_"
 
         msg = (
             f"📤 *PAPER TRADE EXIT*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{dir_emoji} *{position['symbol']} {position['direction']}* — {status_emoji} {status_label}\n"
+            f"{dir_emoji} *{position['symbol']} {position['direction']}* [{strategy_label}]\n"
+            f"{status_emoji} {status_label}\n"
             f"💰 Entry: `{fmt(entry)}` → Exit: `{fmt(exit_price)}`\n"
             f"{pnl_emoji} P&L: *{pnl_sign}${pnl:.2f}*\n"
             f"📊 Leverage: {position['leverage']}x | Durasi: {duration_str}\n"
-            f"💵 Balance: ${balance_after}\n"
+            f"💵 Balance: ${balance_after}{note_line}\n"
             f"⏰ {ts_str}"
         )
         return self._send(msg)

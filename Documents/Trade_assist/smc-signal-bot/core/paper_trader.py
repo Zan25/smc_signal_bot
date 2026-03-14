@@ -34,6 +34,14 @@ EXIT_TP1 = "TP1_HIT"
 EXIT_TP2 = "TP2_HIT"
 EXIT_SL = "SL_HIT"
 EXIT_SL_BE = "SL_HIT_BE"  # SL hit after breakeven move
+EXIT_EXPIRED = "EXPIRED"  # Position auto-closed after max duration
+
+# Max open duration per strategy before auto-cancel
+_MAX_DURATION_HOURS: dict[str, int] = {
+    "scalp": 6,
+    "intraday": 24,
+    "swing": 72,
+}
 
 
 class PaperTrader:
@@ -195,6 +203,36 @@ class PaperTrader:
 
                 closed_now = False
                 exit_reason = None
+
+                # ── Expiry check (auto-cancel jika terlalu lama) ──
+                try:
+                    opened_dt = datetime.fromisoformat(pos["opened_at"])
+                    if not opened_dt.tzinfo:
+                        opened_dt = _WIB.localize(opened_dt)
+                    age_hours = (datetime.now(tz=_WIB) - opened_dt).total_seconds() / 3600
+                    max_hours = _MAX_DURATION_HOURS.get(pos.get("strategy", "intraday"), 24)
+                    if age_hours >= max_hours:
+                        # Close at current price, calculate P&L on remaining notional
+                        fraction = pos["qty_remaining"] / pos["qty"] if pos["qty"] > 0 else 1.0
+                        exp_notional = position_notional * fraction
+                        pnl_exp = self._calc_pnl(is_long, entry, current_price, exp_notional)
+                        pos["realized_pnl"] += pnl_exp
+                        pos["status"] = "closed"
+                        pos["exit_price"] = current_price
+                        pos["exit_pnl"] = pos["realized_pnl"]
+                        pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
+                        pos["partial"] = False
+                        self._state["balance"] += pnl_exp
+                        self._update_peak()
+                        self._state["closed_positions"].append(pos)
+                        exits.append((dict(pos), EXIT_EXPIRED))
+                        closed_now = True
+                        logger.info(
+                            f"[PAPER] {symbol} EXPIRED after {age_hours:.1f}h @ {current_price:.4f} | "
+                            f"P&L=${pos['realized_pnl']:.2f}"
+                        )
+                except Exception as exp_e:
+                    logger.warning(f"[PAPER] Expiry check error for {symbol}: {exp_e}")
 
                 # ── TP1 check (first target, partial close) ──
                 if not pos["tp1_hit"]:

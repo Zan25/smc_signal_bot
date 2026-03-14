@@ -380,10 +380,10 @@ def main() -> None:
         _scheduler.add_job(
             check_paper_positions,
             trigger="interval",
-            minutes=5,
+            minutes=1,          # real-time: cek setiap 1 menit
             id="paper_check",
             name="Paper Position Check",
-            misfire_grace_time=60,
+            misfire_grace_time=30,
             max_instances=1,
         )
         _scheduler.add_job(
