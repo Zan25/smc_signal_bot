@@ -158,6 +158,16 @@ STRATEGIES: list[dict] = [
 ]
 
 
+# ── Paper Trading ─────────────────────────────────────────────────────────────
+PAPER_TRADING_ENABLED: bool = _get_env("PAPER_TRADING_ENABLED", "true").lower() == "true"
+PAPER_INITIAL_BALANCE: float = float(_get_env("PAPER_INITIAL_BALANCE", 100.0))
+PAPER_LEVERAGE: int = 10
+PAPER_RISK_PCT: float = 0.05      # 5% capital per trade (agresif, leverage 10x mengamplify)
+PAPER_MAX_POSITIONS: int = 3      # max posisi bersamaan — kualitas > kuantitas
+PAPER_MAX_MARGIN_PCT: float = 0.25  # max 25% balance sebagai margin per posisi
+PAPER_STATE_FILE: str = str(_BASE_DIR / "paper_state.json")
+
+
 def get_exchange() -> ccxt.gate:
     """Create and return a configured ccxt Gate.io exchange instance for USDT perpetual futures.
 

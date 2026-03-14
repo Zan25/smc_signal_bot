@@ -5,6 +5,7 @@ Runs in a background daemon thread alongside the APScheduler.
 Supported commands:
   /price          — inline keyboard to pick a pair
   /price BTC      — direct price check for a specific pair
+  /porto          — paper trading portfolio: balance, open positions, entry/SL/TP
 """
 
 import time
@@ -23,10 +24,11 @@ _WIB = pytz.timezone(TIMEZONE)
 class TelegramCommandHandler:
     """Polls Telegram getUpdates and handles /price commands with inline keyboard."""
 
-    def __init__(self, token: str, fetcher):
+    def __init__(self, token: str, fetcher, paper_trader=None):
         self._token = token
         self._api = f"https://api.telegram.org/bot{token}"
         self._fetcher = fetcher
+        self._paper_trader = paper_trader
         self._offset: int | None = None
         self._running = False
 
@@ -86,24 +88,24 @@ class TelegramCommandHandler:
         text: str = msg.get("text", "").strip()
         chat_id: int = msg["chat"]["id"]
 
-        if not text.startswith("/price"):
-            return
-
-        parts = text.split(maxsplit=1)
-        if len(parts) == 1:
-            # /price — show pair picker keyboard
-            self._send_keyboard(chat_id)
-        else:
-            # /price BTC or /price BTC/USDT
-            query = parts[1].upper().replace("USDT", "").replace("/", "").strip()
-            matched = next(
-                (p for p in self._all_pairs if p.upper().startswith(query)),
-                None,
-            )
-            if matched:
-                self._send_price(chat_id, matched)
+        if text.startswith("/porto"):
+            self._send_porto(chat_id)
+        elif text.startswith("/price"):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 1:
+                # /price — show pair picker keyboard
+                self._send_keyboard(chat_id)
             else:
-                self._send(chat_id, f"Pair '{parts[1]}' tidak ditemukan.\nKetik /price untuk lihat semua pair.")
+                # /price BTC or /price BTC/USDT
+                query = parts[1].upper().replace("USDT", "").replace("/", "").strip()
+                matched = next(
+                    (p for p in self._all_pairs if p.upper().startswith(query)),
+                    None,
+                )
+                if matched:
+                    self._send_price(chat_id, matched)
+                else:
+                    self._send(chat_id, f"Pair '{parts[1]}' tidak ditemukan.\nKetik /price untuk lihat semua pair.")
 
     def _handle_callback(self, cb: dict) -> None:
         data: str = cb.get("data", "")
@@ -149,6 +151,115 @@ class TelegramCommandHandler:
             requests.post(f"{self._api}/sendMessage", json=payload, timeout=10)
         except Exception as e:
             logger.warning(f"Failed to send keyboard: {e}")
+
+    # ── Portfolio status ───────────────────────────────────────────────────────
+
+    def _send_porto(self, chat_id: int) -> None:
+        """Format and send paper trading portfolio status."""
+        if self._paper_trader is None:
+            self._send(chat_id, "Paper trading tidak aktif.")
+            return
+
+        try:
+            status = self._paper_trader.get_status()
+            state = self._paper_trader._state  # read-only access for display
+
+            balance = status["balance"]
+            initial = status["initial_balance"]
+            roi = (balance - initial) / initial * 100 if initial > 0 else 0.0
+            roi_sign = "+" if roi >= 0 else ""
+            roi_emoji = "📈" if roi >= 0 else "📉"
+            open_positions = state["open_positions"]
+            total_closed = status["total_closed"]
+
+            now_str = datetime.now(tz=_WIB).strftime("%d %b %Y %H:%M WIB")
+
+            def fmt(p: float) -> str:
+                if p >= 1000:
+                    return f"${p:,.2f}"
+                elif p >= 1:
+                    return f"${p:.4f}"
+                else:
+                    return f"${p:.6f}"
+
+            lines = [
+                "💼 *PAPER TRADING PORTFOLIO*",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"💰 Balance: *${balance:.2f}*",
+                f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (dari ${initial:.2f})",
+                f"📂 Posisi Aktif: {len(open_positions)} | Total Closed: {total_closed}",
+            ]
+
+            if not open_positions:
+                lines.append("")
+                lines.append("_Tidak ada posisi aktif saat ini._")
+            else:
+                lines.append("")
+                lines.append("━━ POSISI AKTIF ━━")
+                strategy_emoji_map = {"swing": "📈", "intraday": "⏱️", "scalp": "⚡"}
+                for pos in open_positions:
+                    is_long = pos["direction"] == "LONG"
+                    dir_emoji = "🟢" if is_long else "🔴"
+                    strat = pos.get("strategy", "")
+                    s_emoji = strategy_emoji_map.get(strat, "📊")
+                    s_label = strat.capitalize()
+
+                    entry = pos["entry_price"]
+                    sl = pos["sl"]
+                    tp1 = pos["tp1"]
+                    tp2 = pos["tp2"]
+                    margin = pos["margin_used"]
+                    risk = pos["risk_amount"]
+                    rr = pos.get("rr", 0.0)
+
+                    # Duration
+                    try:
+                        opened = datetime.fromisoformat(pos["opened_at"])
+                        delta = datetime.now(tz=_WIB) - opened
+                        h = int(delta.total_seconds() // 3600)
+                        m = int((delta.total_seconds() % 3600) // 60)
+                        duration_str = f"{h}j {m}m"
+                    except Exception:
+                        duration_str = "?"
+
+                    # Unrealized P&L
+                    unrealized_str = ""
+                    try:
+                        perp_sym = f"{pos['symbol'].replace('/USDT', '')}/USDT:USDT"
+                        current_price = self._fetcher.get_current_price(perp_sym)
+                        if current_price is not None:
+                            fraction = pos["qty_remaining"] / pos["qty"] if pos.get("qty", 0) > 0 else 1.0
+                            notional = pos["position_notional"] * fraction
+                            price_chg = (current_price - entry) / entry
+                            if not is_long:
+                                price_chg = -price_chg
+                            upnl = price_chg * notional * pos["leverage"]
+                            upnl_sign = "+" if upnl >= 0 else ""
+                            upnl_emoji = "📈" if upnl >= 0 else "📉"
+                            unrealized_str = f"\n   {upnl_emoji} P&L sementara: *{upnl_sign}${upnl:.2f}*"
+                    except Exception:
+                        pass
+
+                    tp1_tag = " ✅BE" if pos.get("tp1_hit") else ""
+                    lines += [
+                        f"{dir_emoji} *{pos['symbol']} {pos['direction']}* [{s_label} {s_emoji}]",
+                        f"   Entry: `{fmt(entry)}` | SL: `{fmt(sl)}`{tp1_tag}",
+                        f"   TP1: `{fmt(tp1)}` | TP2: `{fmt(tp2)}`",
+                        f"   Risk: ${risk:.2f} | Margin: ${margin:.2f} | RR: 1:{rr:.1f}",
+                        f"   Durasi: {duration_str}{unrealized_str}",
+                        "",
+                    ]
+
+            lines += [
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"⏰ {now_str}",
+            ]
+
+            self._send(chat_id, "\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"Error sending porto: {e}", exc_info=True)
+            self._send(chat_id, f"Error saat mengambil data portfolio: {e}")
 
     # ── Price fetch & reply ────────────────────────────────────────────────────
 

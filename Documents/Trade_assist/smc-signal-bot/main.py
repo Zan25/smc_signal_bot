@@ -28,10 +28,12 @@ from config.settings import (
     MARKET_UPDATE_HOURS,
     TIMEZONE,
     STRATEGIES,
+    PAPER_TRADING_ENABLED,
 )
 from core.data_fetcher import DataFetcher
 from core import market_structure as ms
 from core import entry_engine
+from core.paper_trader import PaperTrader
 from alerts.telegram_alert import TelegramAlerter
 from alerts.command_handler import TelegramCommandHandler
 from utils.logger import get_logger
@@ -43,6 +45,7 @@ _fetcher: DataFetcher | None = None
 _alerter: TelegramAlerter | None = None
 _scheduler: BlockingScheduler | None = None
 _cmd_handler: TelegramCommandHandler | None = None
+_paper_trader: PaperTrader | None = None
 
 
 # ── Health check HTTP server (keeps Railway happy & allows uptime monitoring) ──
@@ -86,6 +89,17 @@ def _scan_strategy(strategy: dict) -> None:
             setups = entry_engine.analyze_pair(display_sym, mtf_data, strategy)
             for setup in setups:
                 _alerter.send_signal_alert(setup)
+                # Paper trading: simulate entry from this signal
+                if PAPER_TRADING_ENABLED and _paper_trader is not None:
+                    try:
+                        position = _paper_trader.open_position(setup)
+                        if position:
+                            # Attach current balance to position for notification
+                            status = _paper_trader.get_status()
+                            position["balance_at_open"] = f"{status['balance']:.2f}"
+                            _alerter.send_paper_entry(position)
+                    except Exception as pe:
+                        logger.error(f"[PAPER] Error opening position for {display_sym}: {pe}")
 
         except Exception as e:
             logger.error(f"Error scanning {display_sym} ({strategy['name']}): {e}", exc_info=True)
@@ -103,6 +117,37 @@ def scan_intraday() -> None:
 
 def scan_scalp() -> None:
     _scan_strategy(next(s for s in STRATEGIES if s["name"] == "scalp"))
+
+
+def check_paper_positions() -> None:
+    """Check open paper trade positions against current prices. Runs every 5 minutes."""
+    if not PAPER_TRADING_ENABLED or _paper_trader is None:
+        return
+    try:
+        exits = _paper_trader.check_positions(_fetcher)
+        for pos, reason in exits:
+            # Attach balance after exit for notification
+            status = _paper_trader.get_status()
+            pos["balance_after"] = f"{status['balance']:.2f}"
+            _alerter.send_paper_exit(pos, reason)
+    except Exception as e:
+        logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
+
+
+def send_paper_monthly_recap() -> None:
+    """Send paper trading monthly recap. Runs on the 1st of each month at 00:01 WIB."""
+    if not PAPER_TRADING_ENABLED or _paper_trader is None:
+        return
+    from datetime import timedelta
+    import pytz as _pytz
+    now = __import__("datetime").datetime.now(tz=_pytz.timezone(TIMEZONE))
+    # Recap is for the previous month
+    last_month = (now.replace(day=1) - timedelta(days=1))
+    try:
+        stats = _paper_trader.get_monthly_recap(last_month.month, last_month.year)
+        _alerter.send_paper_monthly_recap(stats)
+    except Exception as e:
+        logger.error(f"[PAPER] Error sending monthly recap: {e}", exc_info=True)
 
 
 def send_market_update() -> None:
@@ -198,7 +243,7 @@ def _validate_config() -> None:
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    global _fetcher, _alerter, _scheduler, _cmd_handler
+    global _fetcher, _alerter, _scheduler, _cmd_handler, _paper_trader
 
     logger.info("=" * 50)
     logger.info("SMC Signal Bot starting up...")
@@ -210,12 +255,21 @@ def main() -> None:
     _fetcher = DataFetcher()
     _alerter = TelegramAlerter()
 
+    # Initialize paper trader
+    if PAPER_TRADING_ENABLED:
+        _paper_trader = PaperTrader()
+        status = _paper_trader.get_status()
+        logger.info(
+            f"[PAPER] Paper trading ON — balance=${status['balance']:.2f}, "
+            f"open={status['open_positions']}, total closed={status['total_closed']}"
+        )
+
     # Send startup notification
     all_pairs = sorted(set(p for s in STRATEGIES for p in s["pairs"]))
     _alerter.send_startup_message(all_pairs)
 
-    # Start interactive command handler (handles /price command)
-    _cmd_handler = TelegramCommandHandler(TELEGRAM_BOT_TOKEN, _fetcher)
+    # Start interactive command handler (handles /price and /porto commands)
+    _cmd_handler = TelegramCommandHandler(TELEGRAM_BOT_TOKEN, _fetcher, _paper_trader)
     _cmd_handler.start()
 
     # Register shutdown handlers
@@ -260,6 +314,30 @@ def main() -> None:
         misfire_grace_time=300,
         max_instances=1,
     )
+
+    # Paper trading jobs
+    if PAPER_TRADING_ENABLED:
+        _scheduler.add_job(
+            check_paper_positions,
+            trigger="interval",
+            minutes=5,
+            id="paper_check",
+            name="Paper Position Check",
+            misfire_grace_time=60,
+            max_instances=1,
+        )
+        _scheduler.add_job(
+            send_paper_monthly_recap,
+            trigger="cron",
+            day=1,
+            hour=0,
+            minute=1,
+            id="paper_monthly_recap",
+            name="Paper Monthly Recap",
+            misfire_grace_time=3600,
+            max_instances=1,
+        )
+        logger.info("  💼 Paper trading: position check every 5m, recap every 1st of month")
 
     logger.info(f"Watching: {', '.join(TRADING_PAIRS)}")
     logger.info("Bot is running. Press Ctrl+C to stop.")
