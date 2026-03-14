@@ -37,11 +37,13 @@ def detect_swings(df: pd.DataFrame, n: int = SWING_LOOKBACK) -> tuple[pd.Series,
 
     for i in range(n, size - n):
         window_h = highs[i - n: i + n + 1]
-        if highs[i] == window_h.max():
+        window_max = window_h.max()
+        if highs[i] >= window_max * (1 - 1e-5):
             swing_h[i] = highs[i]
 
         window_l = lows[i - n: i + n + 1]
-        if lows[i] == window_l.min():
+        window_min = window_l.min()
+        if lows[i] <= window_min * (1 + 1e-5):
             swing_l[i] = lows[i]
 
     return pd.Series(swing_h, index=df.index), pd.Series(swing_l, index=df.index)
@@ -55,10 +57,10 @@ def _get_confirmed_swings(swing_series: pd.Series, last_n: int = 5) -> list[floa
 
 def determine_trend(swing_highs: pd.Series, swing_lows: pd.Series) -> str:
     """
-    Determine market trend based on swing structure using majority vote.
+    Determine market trend using weighted scoring on recent swings.
 
-    Uses last 3 confirmed swings (2 consecutive pairs each) and counts
-    bullish vs bearish signals. Majority wins; tie = ranging.
+    Recent swings carry more weight than older ones. A clear directional
+    majority (> 1 point difference) is required to declare a trend.
 
     Bullish signal: Higher High (HH) or Higher Low (HL)
     Bearish signal: Lower High (LH) or Lower Low (LL)
@@ -70,30 +72,33 @@ def determine_trend(swing_highs: pd.Series, swing_lows: pd.Series) -> str:
     Returns:
         'bullish', 'bearish', or 'ranging'
     """
-    highs = _get_confirmed_swings(swing_highs, last_n=3)
-    lows = _get_confirmed_swings(swing_lows, last_n=3)
+    highs = _get_confirmed_swings(swing_highs, last_n=4)
+    lows = _get_confirmed_swings(swing_lows, last_n=4)
 
-    if len(highs) < 2 or len(lows) < 2:
+    if len(highs) < 2 and len(lows) < 2:
         return "ranging"
 
-    bull_count = 0
-    bear_count = 0
+    bull_score = 0.0
+    bear_score = 0.0
 
+    # Weight recent swings more heavily (weight = index position)
     for i in range(1, len(highs)):
+        weight = float(i)
         if highs[i] > highs[i - 1]:
-            bull_count += 1
+            bull_score += weight
         elif highs[i] < highs[i - 1]:
-            bear_count += 1
+            bear_score += weight
 
     for i in range(1, len(lows)):
+        weight = float(i)
         if lows[i] > lows[i - 1]:
-            bull_count += 1
+            bull_score += weight
         elif lows[i] < lows[i - 1]:
-            bear_count += 1
+            bear_score += weight
 
-    if bull_count > bear_count:
+    if bull_score > bear_score + 1.0:
         return "bullish"
-    elif bear_count > bull_count:
+    elif bear_score > bull_score + 1.0:
         return "bearish"
     return "ranging"
 
@@ -175,7 +180,8 @@ def detect_choch(
 
     if trend == "bearish" and highs:
         last_sh = highs[-1]
-        if current_close > last_sh:
+        # Require close 0.05% above level to avoid false pin-bar triggers
+        if current_close > last_sh * 1.0005:
             return {
                 "type": "CHoCH",
                 "direction": "bullish",
@@ -184,7 +190,7 @@ def detect_choch(
 
     if trend == "bullish" and lows:
         last_sl = lows[-1]
-        if current_close < last_sl:
+        if current_close < last_sl * 0.9995:
             return {
                 "type": "CHoCH",
                 "direction": "bearish",

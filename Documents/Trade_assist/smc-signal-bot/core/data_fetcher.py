@@ -187,5 +187,5 @@ def compute_atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
         axis=1,
     ).max(axis=1)
 
-    atr = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    atr = tr.rolling(window=period, min_periods=period).mean()
     return atr

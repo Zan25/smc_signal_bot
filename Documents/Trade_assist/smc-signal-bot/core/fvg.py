@@ -10,7 +10,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MAX_FVG_TRACKED = 10
+_MAX_FVG_TRACKED = 20
 
 
 def detect(df: pd.DataFrame) -> dict:
@@ -61,7 +61,7 @@ def detect(df: pd.DataFrame) -> dict:
                     filled_pct = 1.0
                 else:
                     filled_pct = (zone_high - current_price) / gap_size
-                if filled_pct < 0.5 and len(bullish_fvgs) < _MAX_FVG_TRACKED:
+                if filled_pct < 0.7 and len(bullish_fvgs) < _MAX_FVG_TRACKED:
                     bullish_fvgs.append({
                         "zone_low": zone_low,
                         "zone_high": zone_high,
@@ -79,7 +79,7 @@ def detect(df: pd.DataFrame) -> dict:
                 # Calculate how much price has filled the gap (from below)
                 fill_from_bottom = max(0.0, current_price - zone_low)
                 filled_pct = min(1.0, fill_from_bottom / gap_size) if current_price < zone_high else 1.0
-                if filled_pct < 0.5 and len(bearish_fvgs) < _MAX_FVG_TRACKED:
+                if filled_pct < 0.7 and len(bearish_fvgs) < _MAX_FVG_TRACKED:
                     bearish_fvgs.append({
                         "zone_low": zone_low,
                         "zone_high": zone_high,

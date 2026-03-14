@@ -16,7 +16,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _WIB = pytz.timezone(TIMEZONE)
-_DEDUP_EXPIRY_HOURS = 4
+_DEDUP_EXPIRY_HOURS = 1.5
 
 
 class TelegramAlerter:
@@ -49,10 +49,18 @@ class TelegramAlerter:
         Returns:
             True if message was sent successfully, False otherwise
         """
+        price = setup["entry_mid"]
+        if price >= 100:
+            rounded_price = round(price, 2)
+        elif price >= 10:
+            rounded_price = round(price, 3)
+        else:
+            rounded_price = round(price, 4)
         dedup_key = (
             setup["symbol"],
             setup["direction"],
-            round(setup["entry_mid"], 1),
+            setup.get("strategy_name", "unknown"),
+            rounded_price,
         )
 
         if self._is_duplicate(dedup_key):
@@ -89,7 +97,7 @@ class TelegramAlerter:
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 {len(pairs)} pairs dipantau\n"
             f"✅ Range trading mode: ON\n"
-            f"✅ Threshold: score 3/8, RR 1:2\n"
+            f"✅ Threshold: score 3/8, RR 1:1.5 (10x leverage)\n"
             f"⏰ {datetime.now(tz=_WIB).strftime('%Y-%m-%d %H:%M %Z')}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Bot aktif dan siap mengirim signal!"
@@ -135,6 +143,7 @@ class TelegramAlerter:
             f"🛑 SL: `{fmt(setup['sl'])}`\n"
             f"✅ TP1: `{fmt(setup['tp1'])}` TP2: `{fmt(setup['tp2'])}`\n"
             f"📐 RR: *1:{setup['rr_tp2']:.1f}* {stars} {confidence}/{max_score}\n"
+            f"⚡ Leverage rekomendasi: 10x\n"
             f"📈 Trend: {setup['htf_trend']}\n"
             f"📋 {reasons_text}\n"
             f"⏰ {ts_str}"

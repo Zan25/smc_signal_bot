@@ -98,9 +98,9 @@ HTTPS_PROXY: str = _get_env("HTTPS_PROXY", "")
 CANDLE_LIMIT: int = 200          # candles per timeframe fetch (15m uses 500)
 CANDLE_LIMIT_15M: int = 500      # 15m needs more candles for adequate history
 ATR_PERIOD: int = 14
-SWING_LOOKBACK: int = 2          # fractal swing detection: n candles left+right
-OB_MAX_TRACKED: int = 5          # max order blocks tracked per direction
-EQH_EQL_TOLERANCE: float = 0.002  # 0.2% tolerance for equal highs/lows
+SWING_LOOKBACK: int = 3          # fractal swing detection: n candles left+right
+OB_MAX_TRACKED: int = 8          # max order blocks tracked per direction
+EQH_EQL_TOLERANCE: float = 0.003  # 0.3% tolerance for equal highs/lows
 OB_BUFFER_PCT: float = 0.005     # 0.5% buffer above/below OB for SL placement
 OB_MOVE_MULTIPLIER: float = 2.0  # impulsive move threshold: n * ATR
 OB_PRICE_FLOOR_PCT: float = 0.005  # minimum 0.5% of price for ATR floor
@@ -135,10 +135,10 @@ STRATEGIES: list[dict] = [
         "pairs": INTRADAY_PAIRS,
         "scan_interval_minutes": 5,
         "min_confidence": 3,
-        "min_rr": 2.0,
+        "min_rr": 1.5,
         "ob_fresh_lookback": 40,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
-        "min_sl_pct": 0.006,              # SL minimum 0.6% dari entry
+        "min_sl_pct": 0.003,              # SL minimum 0.3% dari entry (10x leverage)
     },
     {
         "name": "scalp",
@@ -150,10 +150,10 @@ STRATEGIES: list[dict] = [
         "pairs": SCALP_PAIRS,
         "scan_interval_minutes": 5,
         "min_confidence": 3,
-        "min_rr": 2.0,
+        "min_rr": 1.5,
         "ob_fresh_lookback": 30,
         "ob_sl_buffer": 0.005,            # 0.5% buffer — 15m OBs
-        "min_sl_pct": 0.004,              # SL minimum 0.4% dari entry
+        "min_sl_pct": 0.003,              # SL minimum 0.3% dari entry (10x leverage)
     },
 ]
 

@@ -66,9 +66,10 @@ def _find_tp_levels(
         if len(candidates) >= 2:
             return candidates[0], candidates[-1]
         elif len(candidates) == 1:
-            return candidates[0], candidates[0] * 1.03  # fallback: 3% above
+            return candidates[0], candidates[0] * 1.015  # fallback: 1.5% above
         else:
-            return current_price * 1.02, current_price * 1.05
+            # Fallback targets calibrated for 10x leverage (0.8% and 2% moves)
+            return current_price * 1.008, current_price * 1.020
 
     else:  # bearish
         # Look for support levels below current price
@@ -84,9 +85,10 @@ def _find_tp_levels(
         if len(candidates) >= 2:
             return candidates[0], candidates[-1]
         elif len(candidates) == 1:
-            return candidates[0], candidates[0] * 0.97
+            return candidates[0], candidates[0] * 0.985
         else:
-            return current_price * 0.98, current_price * 0.95
+            # Fallback targets calibrated for 10x leverage (0.8% and 2% moves)
+            return current_price * 0.992, current_price * 0.980
 
 
 def _build_reasons(
@@ -238,10 +240,10 @@ def analyze_pair(
             ob_match = ob
             break
 
-    # Find matching FVG: price inside or within 0.5% of zone edges
+    # Find matching FVG: price inside or within 2% of zone width
     fvg_match = None
     for fv in fvg_list:
-        fvg_tol = (fv["zone_high"] - fv["zone_low"]) * 0.005 + fv["zone_low"] * 0.005
+        fvg_tol = (fv["zone_high"] - fv["zone_low"]) * 0.02
         if fv["zone_low"] - fvg_tol <= current_price <= fv["zone_high"] + fvg_tol:
             fvg_match = fv
             break
@@ -250,11 +252,11 @@ def analyze_pair(
     score = 0
     score += 1  # TF alignment confirmed
 
-    # Zone bonus: long needs price in bottom 40%, short in top 40%
+    # Zone bonus: long needs price in bottom 45%, short in top 45%
     pos = pd_result["position_pct"]
-    if is_long and pos < 40.0:
+    if is_long and pos < 45.0:
         score += 1
-    elif not is_long and pos > 60.0:
+    elif not is_long and pos > 55.0:
         score += 1
 
     if ob_match is not None:
@@ -307,11 +309,6 @@ def analyze_pair(
     # All strategies require OB or FVG as a structural entry zone
     if ob_match is None and fvg_match is None:
         logger.info(f"{symbol}: Requires OB or FVG — none found, skipping")
-        return setups
-
-    # Ranging markets require OB (more precise zone needed — FVG alone not enough)
-    if is_ranging_market and ob_match is None:
-        logger.info(f"{symbol}: Ranging market requires OB — none found, skipping")
         return setups
 
     # ── 9. Entry / SL / TP ───────────────────────────────────────────────────

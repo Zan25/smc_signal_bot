@@ -39,7 +39,7 @@ def _is_impulsive_move(
     Returns:
         True if impulsive move detected
     """
-    if start_idx + 3 >= len(df):
+    if start_idx + 5 >= len(df):
         return False
 
     atr_val = float(atr.iloc[start_idx]) if not pd.isna(atr.iloc[start_idx]) else 0
@@ -48,8 +48,8 @@ def _is_impulsive_move(
     atr_val = max(atr_val, price * OB_PRICE_FLOOR_PCT)
     threshold = OB_MOVE_MULTIPLIER * atr_val
 
-    # Check 3-candle move after start
-    end_idx = min(start_idx + 3, len(df) - 1)
+    # Check 5-candle move after start (more tolerant for higher TF OBs)
+    end_idx = min(start_idx + 5, len(df) - 1)
 
     if direction == "bullish":
         move = float(df["high"].iloc[end_idx]) - float(df["low"].iloc[start_idx])
@@ -91,12 +91,12 @@ def detect(
     bearish_obs = []
     current_price = float(df["close"].iloc[-1])
 
-    # Scan backwards, skip last 3 candles (need lookahead to confirm move)
-    scan_end = len(df) - 3
+    # Scan backwards, skip last 5 candles (need lookahead to confirm move)
+    scan_end = len(df) - 5
     if scan_end < 10:
         return {"bullish": [], "bearish": []}
 
-    for i in range(scan_end - 1, max(scan_end - 100, 0), -1):
+    for i in range(scan_end - 1, max(scan_end - 200, 0), -1):
         candle_open = float(df["open"].iloc[i])
         candle_close = float(df["close"].iloc[i])
         is_bullish_candle = candle_close > candle_open
@@ -110,7 +110,11 @@ def detect(
         ):
             zone_low = min(candle_open, candle_close)
             zone_high = max(candle_open, candle_close)
-            mitigated = _check_mitigation(current_price, zone_low, zone_high)
+            # Retroactive mitigation: check if any candle AFTER the OB closed inside zone
+            mitigated = any(
+                zone_low <= float(df["close"].iloc[j]) <= zone_high
+                for j in range(i + 1, len(df))
+            )
             if not mitigated:
                 bullish_obs.append({
                     "zone_low": zone_low,
@@ -128,7 +132,11 @@ def detect(
         ):
             zone_low = min(candle_open, candle_close)
             zone_high = max(candle_open, candle_close)
-            mitigated = _check_mitigation(current_price, zone_low, zone_high)
+            # Retroactive mitigation: check if any candle AFTER the OB closed inside zone
+            mitigated = any(
+                zone_low <= float(df["close"].iloc[j]) <= zone_high
+                for j in range(i + 1, len(df))
+            )
             if not mitigated:
                 bearish_obs.append({
                     "zone_low": zone_low,
