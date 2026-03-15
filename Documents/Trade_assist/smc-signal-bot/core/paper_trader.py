@@ -115,8 +115,9 @@ class PaperTrader:
                 )
                 return None
 
-            # Fill at the zone midpoint (limit order simulation — realistic SMC entry)
-            entry = float(setup["entry_mid"])
+            # Fill at current market price (market fill when price enters zone)
+            # entry_mid is a historical OB midpoint — using current_price is more realistic
+            entry = current_price
 
             # Guard: TP1/TP2 must be on the correct side of entry
             # (if TP1 ≤ entry for LONG or TP1 ≥ entry for SHORT, the setup is degenerate)
