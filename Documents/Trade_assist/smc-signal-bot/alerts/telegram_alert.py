@@ -265,7 +265,7 @@ class TelegramAlerter:
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Trade hari ini: {today_count} | Target: {slot_target}\n"
             f"Butuh: *{needed} posisi lagi*\n"
-            f"Scanning 10 pair utama\\.\\.\\."
+            f"Scanning 10 pair utama..."
         )
         return self._send(msg)
 
@@ -276,7 +276,7 @@ class TelegramAlerter:
             status_label = f"Berhasil buka *{opened}* posisi"
         elif opened > 0:
             status_emoji = "⚠️"
-            status_label = f"Buka *{opened}/{needed}* posisi \\(tidak penuh\\)"
+            status_label = f"Buka *{opened}/{needed}* posisi (tidak penuh)"
         else:
             status_emoji = "❌"
             status_label = "Tidak ada setup valid ditemukan"
@@ -305,7 +305,7 @@ class TelegramAlerter:
             f"📊 *RINGKASAN HARIAN — {summary['date']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💼 Balance: *${balance:.2f}*\n"
-            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* \\(dari ${initial:.2f}\\)\n"
+            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (dari ${initial:.2f})\n"
             f"\n"
             f"📋 *Trade Hari Ini:*\n"
             f"• Total dibuka: {opened_today} posisi\n"
@@ -320,11 +320,13 @@ class TelegramAlerter:
     def send_startup_message(self, pairs: list[str]) -> bool:
         """Send bot startup notification."""
         msg = (
-            f"🤖 *SMC Signal Bot Started* v2.0\n"
+            f"🤖 *SMC Signal Bot Started* v2.1\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 {len(pairs)} pairs dipantau\n"
-            f"✅ Range trading mode: ON\n"
-            f"✅ Threshold: score 3/8, RR 1:1.5 (10x leverage)\n"
+            f"📊 {len(pairs)} pairs dipantau (parallel scan)\n"
+            f"✅ Range trading mode: ON (dead zone 40-60%)\n"
+            f"✅ Scalp/Intraday: score 2/8 min, Swing: 3/8\n"
+            f"✅ TF conflict: 1 TF boleh beda (soft check)\n"
+            f"🔫 Forced trade: 09:00, 13:00, 18:00 WIB\n"
             f"⏰ {datetime.now(tz=_WIB).strftime('%Y-%m-%d %H:%M %Z')}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Bot aktif dan siap mengirim signal!"
