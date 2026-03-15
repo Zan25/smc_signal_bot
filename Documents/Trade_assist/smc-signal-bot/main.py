@@ -7,6 +7,8 @@ import sys
 import signal
 import logging
 import threading
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -54,37 +56,69 @@ _forced_intraday_strategy: dict | None = None  # intraday with relaxed threshold
 
 # ── Signal cooldown tracking ────────────────────────────────────────────────────
 # Prevents the same pair+direction from spamming every scan cycle.
-# Key: "{symbol}_{direction}_{strategy_name}", Value: datetime last sent
-_signal_cooldown: dict[str, datetime] = {}
+# Key: "{symbol}_{direction}" (cross-strategy), Value: (ISO timestamp, strategy_name)
+# Persisted to file so cooldown survives bot restarts / Railway redeploys.
+_COOLDOWN_FILE = Path(__file__).resolve().parent / "cooldown_state.json"
+_signal_cooldown: dict[str, tuple] = {}   # key → (datetime, strategy_name)
 _signal_cooldown_lock = threading.Lock()
 _COOLDOWN_HOURS: dict[str, int] = {
     "swing": 8,      # swing signals valid 8 hours
     "intraday": 4,   # intraday signals valid 4 hours
     "scalp": 2,      # scalp signals valid 2 hours
 }
+_MAX_COOLDOWN_HOURS = max(_COOLDOWN_HOURS.values())
+
+
+def _load_cooldown() -> None:
+    """Load cooldown state from file on startup, discarding expired entries."""
+    global _signal_cooldown
+    if not _COOLDOWN_FILE.exists():
+        return
+    try:
+        with open(_COOLDOWN_FILE) as f:
+            raw = json.load(f)
+        now = datetime.now()
+        loaded = {}
+        for key, (ts_str, strat) in raw.items():
+            ts = datetime.fromisoformat(ts_str)
+            if now - ts < timedelta(hours=_MAX_COOLDOWN_HOURS):
+                loaded[key] = (ts, strat)
+        with _signal_cooldown_lock:
+            _signal_cooldown = loaded
+        logger.info(f"[COOLDOWN] Loaded {len(loaded)} active cooldowns from file")
+    except Exception as e:
+        logger.warning(f"[COOLDOWN] Could not load cooldown state: {e}")
+
+
+def _save_cooldown() -> None:
+    """Persist current cooldown state to file."""
+    try:
+        with _signal_cooldown_lock:
+            data = {k: (ts.isoformat(), strat) for k, (ts, strat) in _signal_cooldown.items()}
+        with open(_COOLDOWN_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.warning(f"[COOLDOWN] Could not save cooldown state: {e}")
 
 
 def _is_on_cooldown(setup: dict) -> bool:
-    """Return True if this pair+direction was sent recently (any strategy counts).
-
-    Cooldown is keyed by symbol+direction only — prevents cross-strategy duplicates
-    (e.g., scalp AND intraday both firing LTC LONG in the same window).
-    Cooldown duration is determined by the strategy that sent the signal first.
-    """
+    """Return True if this pair+direction was sent recently (any strategy counts)."""
     key = f"{setup['symbol']}_{setup['direction']}"
     with _signal_cooldown_lock:
-        last_sent, _ = _signal_cooldown.get(key, (None, None))
-        if not last_sent:
+        entry = _signal_cooldown.get(key)
+        if not entry:
             return False
+        last_sent, strat = entry
         hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
         return datetime.now() - last_sent < timedelta(hours=hours)
 
 
 def _mark_cooldown(setup: dict) -> None:
-    """Record that this signal was just sent (keyed by symbol+direction only)."""
+    """Record that this signal was just sent, then persist to file."""
     key = f"{setup['symbol']}_{setup['direction']}"
     with _signal_cooldown_lock:
         _signal_cooldown[key] = (datetime.now(), setup.get("strategy_name", ""))
+    _save_cooldown()
 
 
 # ── Health check HTTP server (keeps Railway happy & allows uptime monitoring) ──
@@ -388,6 +422,7 @@ def main() -> None:
     logger.info("=" * 50)
 
     _validate_config()
+    _load_cooldown()  # restore signal cooldown state from previous run
 
     # Initialize modules
     _fetcher = DataFetcher()
