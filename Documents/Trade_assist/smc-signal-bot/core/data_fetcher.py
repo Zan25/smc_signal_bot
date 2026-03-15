@@ -131,15 +131,23 @@ class DataFetcher:
 
     def get_current_price(self, symbol: str) -> float | None:
         """
-        Get the latest close price for a symbol.
+        Get the real-time last traded price for a symbol via ticker.
 
         Args:
             symbol: Perpetual pair, e.g. 'BTC/USDT:USDT'
 
         Returns:
-            Latest close price as float, or None on failure.
+            Last traded price as float, or None on failure.
         """
-        df = self.fetch_ohlcv(symbol, "15m", limit=2)
+        try:
+            ticker = self._exchange.fetch_ticker(symbol)
+            price = ticker.get("last") or ticker.get("close")
+            if price is not None:
+                return float(price)
+        except Exception as e:
+            logger.warning(f"get_current_price ticker failed for {symbol}: {e}")
+        # Fallback to OHLCV close
+        df = self.fetch_ohlcv(symbol, "1m", limit=2)
         if df is not None and len(df) > 0:
             return float(df["close"].iloc[-1])
         return None
