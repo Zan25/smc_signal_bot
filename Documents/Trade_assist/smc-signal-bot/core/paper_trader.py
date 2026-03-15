@@ -37,10 +37,11 @@ EXIT_SL_BE = "SL_HIT_BE"  # SL hit after breakeven move
 EXIT_EXPIRED = "EXPIRED"  # Position auto-closed after max duration
 
 # Max open duration per strategy before auto-cancel
+# Kept short so positions close daily and simulation stays realistic
 _MAX_DURATION_HOURS: dict[str, int] = {
-    "scalp": 6,
-    "intraday": 24,
-    "swing": 72,
+    "scalp": 4,
+    "intraday": 8,
+    "swing": 24,
 }
 
 
@@ -105,18 +106,27 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
-            # Guard: price must be inside or within 1% of the entry zone
-            # (if price already moved far away, the setup is stale — don't simulate a fill)
-            zone_tolerance = max(entry_high - entry_low, current_price * 0.01)
-            if current_price < entry_low - zone_tolerance or current_price > entry_high + zone_tolerance:
+            # Guard: current price must be INSIDE the entry zone [entry_low, entry_high]
+            # If price has moved away from the zone, the signal is stale — don't open
+            if current_price < entry_low or current_price > entry_high:
                 logger.info(
                     f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
-                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] ± tolerance"
+                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
                 )
                 return None
 
-            # Simulate market fill at current price (not theoretical zone midpoint)
-            entry = current_price
+            # Fill at the zone midpoint (limit order simulation — realistic SMC entry)
+            entry = float(setup["entry_mid"])
+
+            # Guard: TP1/TP2 must be on the correct side of entry
+            # (if TP1 ≤ entry for LONG or TP1 ≥ entry for SHORT, the setup is degenerate)
+            is_long = direction == "LONG"
+            if is_long and (tp1 <= entry or tp2 <= entry):
+                logger.info(f"[PAPER] Skip {symbol} LONG: TP {tp1:.4f}/{tp2:.4f} ≤ entry {entry:.4f}")
+                return None
+            if not is_long and (tp1 >= entry or tp2 >= entry):
+                logger.info(f"[PAPER] Skip {symbol} SHORT: TP {tp1:.4f}/{tp2:.4f} ≥ entry {entry:.4f}")
+                return None
 
             balance = self._state["balance"]
 
@@ -512,16 +522,40 @@ class PaperTrader:
             self._state["peak_balance"] = self._state["balance"]
 
     def _load_state(self) -> dict:
-        """Load state from JSON file, or create a fresh state if file doesn't exist."""
+        """Load state from JSON file, or create a fresh state if file doesn't exist.
+
+        On load, any open position older than its max_duration is force-closed at
+        its own entry price (wash trade) to prevent stale/yesterday prices persisting.
+        """
         if self._state_path.exists():
             try:
                 with open(self._state_path, "r", encoding="utf-8") as f:
                     state = json.load(f)
-                # Ensure all required keys exist (backwards compatibility)
                 state.setdefault("initial_balance", PAPER_INITIAL_BALANCE)
                 state.setdefault("peak_balance", state.get("balance", PAPER_INITIAL_BALANCE))
                 state.setdefault("open_positions", [])
                 state.setdefault("closed_positions", [])
+
+                # Purge stale open positions (older than their max_duration)
+                now = datetime.now(tz=_WIB)
+                fresh, purged = [], []
+                for pos in state["open_positions"]:
+                    try:
+                        opened_dt = datetime.fromisoformat(pos["opened_at"])
+                        if not opened_dt.tzinfo:
+                            opened_dt = _WIB.localize(opened_dt)
+                        age_h = (now - opened_dt).total_seconds() / 3600
+                        max_h = _MAX_DURATION_HOURS.get(pos.get("strategy", "intraday"), 24)
+                        if age_h >= max_h:
+                            purged.append(pos["symbol"])
+                        else:
+                            fresh.append(pos)
+                    except Exception:
+                        fresh.append(pos)
+                if purged:
+                    logger.info(f"[PAPER] Startup purge: {len(purged)} expired positions removed: {purged}")
+                state["open_positions"] = fresh
+
                 logger.info(f"[PAPER] State loaded from {self._state_path}")
                 return state
             except Exception as e:
