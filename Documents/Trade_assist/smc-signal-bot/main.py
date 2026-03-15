@@ -159,43 +159,56 @@ def _scan_pair(display_sym: str, perp_sym: str, strategy: dict) -> tuple:
 
 
 def _scan_strategy(strategy: dict) -> None:
-    """Scan all pairs for a given strategy in parallel (4 workers)."""
+    """Scan all pairs for a given strategy in parallel (4 workers).
+
+    Collects all valid setups first, then sends only the top-N by score
+    (max_signals_per_scan) to avoid Telegram spam.
+    """
     pairs = strategy["pairs"]
     perp_pairs = [f"{p}:USDT" for p in pairs]
     strat_name = strategy["name"].upper()
+    max_signals = strategy.get("max_signals_per_scan", 3)
     logger.info(f"=== [{strat_name}] Scan dimulai ({len(pairs)} pair, parallel) ===")
 
-    signals_sent = 0
+    # Collect all valid setups from parallel scan
+    all_setups: list[dict] = []
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan") as executor:
         futures = {
             executor.submit(_scan_pair, sym, perp, strategy): sym
             for sym, perp in zip(pairs, perp_pairs)
         }
         for future in as_completed(futures):
-            sym, setups = future.result()
+            _, setups = future.result()
             for setup in setups:
-                if _is_on_cooldown(setup):
-                    logger.debug(
-                        f"[COOLDOWN] {sym} {setup['direction']} ({strategy['name']}) — cooldown aktif, skip"
-                    )
-                    continue
-                sent = _alerter.send_signal_alert(setup)
-                # Mark cooldown regardless — even if alerter skipped (dedup),
-                # we don't want main.py to keep retrying every scan cycle.
-                _mark_cooldown(setup)
-                if sent:
-                    signals_sent += 1
-                else:
-                    logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
-                if PAPER_TRADING_ENABLED and _paper_trader is not None:
-                    try:
-                        position = _paper_trader.open_position(setup)
-                        if position:
-                            status = _paper_trader.get_status()
-                            position["balance_at_open"] = f"{status['balance']:.2f}"
-                            _alerter.send_paper_entry(position)
-                    except Exception as pe:
-                        logger.error(f"[PAPER] Error open position {sym}: {pe}")
+                if not _is_on_cooldown(setup):
+                    all_setups.append(setup)
+
+    # Sort by confidence score (desc), take top-N only
+    all_setups.sort(key=lambda s: s.get("confidence", 0), reverse=True)
+    top_setups = all_setups[:max_signals]
+
+    if len(all_setups) > max_signals:
+        skipped = len(all_setups) - max_signals
+        logger.info(f"[{strat_name}] {len(all_setups)} setup valid → ambil {max_signals} terbaik, skip {skipped} lainnya")
+
+    signals_sent = 0
+    for setup in top_setups:
+        sym = setup["symbol"]
+        sent = _alerter.send_signal_alert(setup)
+        _mark_cooldown(setup)
+        if sent:
+            signals_sent += 1
+        else:
+            logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
+        if PAPER_TRADING_ENABLED and _paper_trader is not None:
+            try:
+                position = _paper_trader.open_position(setup)
+                if position:
+                    status = _paper_trader.get_status()
+                    position["balance_at_open"] = f"{status['balance']:.2f}"
+                    _alerter.send_paper_entry(position)
+            except Exception as pe:
+                logger.error(f"[PAPER] Error open position {sym}: {pe}")
 
     logger.info(f"=== [{strat_name}] Scan selesai — {signals_sent} sinyal dari {len(pairs)} pair ===")
 
