@@ -16,7 +16,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _WIB = pytz.timezone(TIMEZONE)
-_DEDUP_EXPIRY_HOURS = 1.5
+_DEDUP_EXPIRY_HOURS = 8  # match longest cooldown window (swing=8h)
 
 
 class TelegramAlerter:

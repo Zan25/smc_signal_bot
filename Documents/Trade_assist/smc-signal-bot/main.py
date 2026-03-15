@@ -180,11 +180,13 @@ def _scan_strategy(strategy: dict) -> None:
                     )
                     continue
                 sent = _alerter.send_signal_alert(setup)
-                if not sent:
-                    logger.warning(f"[ALERT] Gagal kirim sinyal {sym} ke Telegram")
-                else:
-                    _mark_cooldown(setup)
+                # Mark cooldown regardless — even if alerter skipped (dedup),
+                # we don't want main.py to keep retrying every scan cycle.
+                _mark_cooldown(setup)
+                if sent:
                     signals_sent += 1
+                else:
+                    logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
                 if PAPER_TRADING_ENABLED and _paper_trader is not None:
                     try:
                         position = _paper_trader.open_position(setup)
