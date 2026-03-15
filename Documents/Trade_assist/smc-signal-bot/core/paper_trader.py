@@ -82,7 +82,9 @@ class PaperTrader:
         with self._lock:
             symbol = setup["symbol"]
             direction = setup["direction"]
-            entry = float(setup["entry_mid"])
+            current_price = float(setup["current_price"])   # actual market price at signal time
+            entry_low = float(setup["entry_low"])
+            entry_high = float(setup["entry_high"])
             sl = float(setup["sl"])
             tp1 = float(setup["tp1"])
             tp2 = float(setup["tp2"])
@@ -102,6 +104,19 @@ class PaperTrader:
                 if pos["symbol"] == symbol and pos["direction"] == direction:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
+
+            # Guard: price must be inside or within 1% of the entry zone
+            # (if price already moved far away, the setup is stale — don't simulate a fill)
+            zone_tolerance = max(entry_high - entry_low, current_price * 0.01)
+            if current_price < entry_low - zone_tolerance or current_price > entry_high + zone_tolerance:
+                logger.info(
+                    f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
+                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] ± tolerance"
+                )
+                return None
+
+            # Simulate market fill at current price (not theoretical zone midpoint)
+            entry = current_price
 
             balance = self._state["balance"]
 
