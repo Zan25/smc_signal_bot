@@ -65,19 +65,26 @@ _COOLDOWN_HOURS: dict[str, int] = {
 
 
 def _is_on_cooldown(setup: dict) -> bool:
-    """Return True if this pair+direction+strategy was sent recently (cooldown active)."""
-    key = f"{setup['symbol']}_{setup['direction']}_{setup.get('strategy_name', '')}"
-    hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
+    """Return True if this pair+direction was sent recently (any strategy counts).
+
+    Cooldown is keyed by symbol+direction only — prevents cross-strategy duplicates
+    (e.g., scalp AND intraday both firing LTC LONG in the same window).
+    Cooldown duration is determined by the strategy that sent the signal first.
+    """
+    key = f"{setup['symbol']}_{setup['direction']}"
     with _signal_cooldown_lock:
-        last_sent = _signal_cooldown.get(key)
-        return bool(last_sent and datetime.now() - last_sent < timedelta(hours=hours))
+        last_sent, _ = _signal_cooldown.get(key, (None, None))
+        if not last_sent:
+            return False
+        hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
+        return datetime.now() - last_sent < timedelta(hours=hours)
 
 
 def _mark_cooldown(setup: dict) -> None:
-    """Record that this signal was just sent."""
-    key = f"{setup['symbol']}_{setup['direction']}_{setup.get('strategy_name', '')}"
+    """Record that this signal was just sent (keyed by symbol+direction only)."""
+    key = f"{setup['symbol']}_{setup['direction']}"
     with _signal_cooldown_lock:
-        _signal_cooldown[key] = datetime.now()
+        _signal_cooldown[key] = (datetime.now(), setup.get("strategy_name", ""))
 
 
 # ── Health check HTTP server (keeps Railway happy & allows uptime monitoring) ──
