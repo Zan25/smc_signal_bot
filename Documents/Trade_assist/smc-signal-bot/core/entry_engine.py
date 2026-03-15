@@ -217,6 +217,18 @@ def analyze_pair(
             logger.info(f"{symbol}: Weak TF alignment ({trend_desc}, {confirmations}/{len(htf_tfs)} confirm) — skipping")
             return []
 
+    # ── 4b. Zone sanity check (non-ranging path only) ─────────────────────────
+    # If price is way outside the detected swing range (pos > 110% or pos < -10%),
+    # the swing levels are likely stale — skip to avoid chasing
+    if not is_ranging_market:
+        pos_sanity = pd_result["position_pct"]
+        if htf_direction == "bullish" and pos_sanity > 110.0:
+            logger.info(f"{symbol}: Zone {pos_sanity:.0f}% too far above range for LONG — skipping")
+            return []
+        if htf_direction == "bearish" and pos_sanity < -10.0:
+            logger.info(f"{symbol}: Zone {pos_sanity:.0f}% too far below range for SHORT — skipping")
+            return []
+
     # ── 5. ATR + OBs + FVGs + Liquidity on ob_tf ─────────────────────────────
     atr_ob = df_module.compute_atr(df_ob)
     obs_ob = order_blocks.detect(df_ob, atr_ob, struct_ob)

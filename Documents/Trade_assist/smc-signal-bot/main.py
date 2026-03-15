@@ -7,6 +7,7 @@ import sys
 import signal
 import logging
 import threading
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -50,6 +51,33 @@ _scheduler: BlockingScheduler | None = None
 _cmd_handler: TelegramCommandHandler | None = None
 _paper_trader: PaperTrader | None = None
 _forced_intraday_strategy: dict | None = None  # intraday with relaxed thresholds for forced scan
+
+# ── Signal cooldown tracking ────────────────────────────────────────────────────
+# Prevents the same pair+direction from spamming every scan cycle.
+# Key: "{symbol}_{direction}_{strategy_name}", Value: datetime last sent
+_signal_cooldown: dict[str, datetime] = {}
+_signal_cooldown_lock = threading.Lock()
+_COOLDOWN_HOURS: dict[str, int] = {
+    "swing": 8,      # swing signals valid 8 hours
+    "intraday": 4,   # intraday signals valid 4 hours
+    "scalp": 2,      # scalp signals valid 2 hours
+}
+
+
+def _is_on_cooldown(setup: dict) -> bool:
+    """Return True if this pair+direction+strategy was sent recently (cooldown active)."""
+    key = f"{setup['symbol']}_{setup['direction']}_{setup.get('strategy_name', '')}"
+    hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
+    with _signal_cooldown_lock:
+        last_sent = _signal_cooldown.get(key)
+        return bool(last_sent and datetime.now() - last_sent < timedelta(hours=hours))
+
+
+def _mark_cooldown(setup: dict) -> None:
+    """Record that this signal was just sent."""
+    key = f"{setup['symbol']}_{setup['direction']}_{setup.get('strategy_name', '')}"
+    with _signal_cooldown_lock:
+        _signal_cooldown[key] = datetime.now()
 
 
 # ── Health check HTTP server (keeps Railway happy & allows uptime monitoring) ──
@@ -105,10 +133,16 @@ def _scan_strategy(strategy: dict) -> None:
         for future in as_completed(futures):
             sym, setups = future.result()
             for setup in setups:
+                if _is_on_cooldown(setup):
+                    logger.debug(
+                        f"[COOLDOWN] {sym} {setup['direction']} ({strategy['name']}) — cooldown aktif, skip"
+                    )
+                    continue
                 sent = _alerter.send_signal_alert(setup)
                 if not sent:
                     logger.warning(f"[ALERT] Gagal kirim sinyal {sym} ke Telegram")
                 else:
+                    _mark_cooldown(setup)
                     signals_sent += 1
                 if PAPER_TRADING_ENABLED and _paper_trader is not None:
                     try:
