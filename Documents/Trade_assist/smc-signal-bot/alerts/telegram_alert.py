@@ -193,7 +193,7 @@ class TelegramAlerter:
         if reason == "TP1_HIT":
             note_line = f"\n📌 _Sisa 50% masih open, SL dipindah ke entry (breakeven)_"
         elif reason == "EXPIRED":
-            max_h = {"scalp": 6, "intraday": 24, "swing": 72}.get(position.get("strategy", "intraday"), 24)
+            max_h = {"scalp": 4, "intraday": 8, "swing": 24}.get(position.get("strategy", "intraday"), 24)
             note_line = f"\n📌 _Posisi ditutup otomatis setelah {max_h}j tanpa TP/SL hit_"
 
         msg = (

@@ -482,12 +482,14 @@ def main() -> None:
     _scheduler.add_listener(_on_job_error, EVENT_JOB_ERROR)
 
     # One scan job per strategy, each with its own interval
+    # Scalp is disabled — only swing and intraday send signals
     strategy_fns = {
         "swing": scan_swing,
         "intraday": scan_intraday,
-        "scalp": scan_scalp,
     }
     for strat in STRATEGIES:
+        if strat["name"] not in strategy_fns:
+            continue  # scalp (and any future disabled strategy) skipped
         fn = strategy_fns[strat["name"]]
         _scheduler.add_job(
             fn,
@@ -573,9 +575,9 @@ def main() -> None:
     # Start health check HTTP server (port 8080 for Railway uptime monitoring)
     _start_health_server(port=8080)
 
-    # Run the first scan immediately — each isolated so one failure won't block others
+    # Run the first scan immediately — scalp disabled, only swing + intraday
     for fn, name in [(scan_swing, "swing"), (scan_intraday, "intraday"),
-                     (scan_scalp, "scalp"), (send_market_update, "market_update")]:
+                     (send_market_update, "market_update")]:
         try:
             fn()
         except Exception as e:
