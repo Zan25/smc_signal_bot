@@ -19,6 +19,7 @@ from config.settings import (
     PAPER_LEVERAGE,
     PAPER_RISK_PCT,
     PAPER_MAX_POSITIONS,
+    PAPER_MAX_DAILY_TRADES,
     PAPER_MAX_MARGIN_PCT,
     PAPER_STATE_FILE,
     TIMEZONE,
@@ -50,9 +51,10 @@ class PaperTrader:
     Simulates paper trading from signals produced by entry_engine.
 
     Capital management rules:
-    - Risk 5% of current balance per trade
-    - Max 3 concurrent open positions
-    - Max 25% of balance as margin per single position
+    - Risk 10% of current balance per trade
+    - Max 3 trades per day (hard daily cap — tidak buka posisi ke-4)
+    - Max 2 posisi bersamaan (concurrent)
+    - Max 30% of balance as margin per single position
     - Leverage: 10x fixed
     - TP1 hit: close 50% of position, move SL to breakeven
     - TP2 hit: close remaining 50%
@@ -65,7 +67,9 @@ class PaperTrader:
         self._state = self._load_state()
         logger.info(
             f"[PAPER] Initialized — balance=${self._state['balance']:.2f}, "
-            f"open={len(self._state['open_positions'])} positions"
+            f"open={len(self._state['open_positions'])} positions | "
+            f"max {PAPER_MAX_DAILY_TRADES} trades/day, {PAPER_MAX_POSITIONS} concurrent, "
+            f"10x leverage, risk={int(PAPER_RISK_PCT*100)}%/trade"
         )
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -95,9 +99,18 @@ class PaperTrader:
 
             open_positions = self._state["open_positions"]
 
+            # Guard: max daily trades (hard cap — 3 trades per day total, open or closed)
+            today_count = self._count_today_trades()
+            if today_count >= PAPER_MAX_DAILY_TRADES:
+                logger.info(
+                    f"[PAPER] Skip {symbol} {direction}: daily limit reached "
+                    f"({today_count}/{PAPER_MAX_DAILY_TRADES} trades today)"
+                )
+                return None
+
             # Guard: max concurrent positions
             if len(open_positions) >= PAPER_MAX_POSITIONS:
-                logger.info(f"[PAPER] Skip {symbol} {direction}: max {PAPER_MAX_POSITIONS} positions reached")
+                logger.info(f"[PAPER] Skip {symbol} {direction}: max {PAPER_MAX_POSITIONS} concurrent positions")
                 return None
 
             # Guard: no duplicate symbol+direction
@@ -455,19 +468,8 @@ class PaperTrader:
 
     def get_today_count(self) -> int:
         """Hitung posisi yang dibuka hari ini (open + closed combined)."""
-        today = datetime.now(tz=_WIB).date()
-        count = 0
         with self._lock:
-            for pos in self._state["open_positions"] + self._state["closed_positions"]:
-                try:
-                    opened_dt = datetime.fromisoformat(pos["opened_at"])
-                    if not opened_dt.tzinfo:
-                        opened_dt = _WIB.localize(opened_dt)
-                    if opened_dt.astimezone(_WIB).date() == today:
-                        count += 1
-                except Exception:
-                    pass
-        return count
+            return self._count_today_trades()
 
     def get_daily_summary(self) -> dict:
         """Ambil statistik trading hari ini untuk daily summary Telegram notification."""
@@ -507,6 +509,21 @@ class PaperTrader:
             }
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
+    def _count_today_trades(self) -> int:
+        """Count trades opened today (open + closed). Called inside lock."""
+        today = datetime.now(tz=_WIB).date()
+        count = 0
+        for pos in self._state["open_positions"] + self._state["closed_positions"]:
+            try:
+                opened_dt = datetime.fromisoformat(pos["opened_at"])
+                if not opened_dt.tzinfo:
+                    opened_dt = _WIB.localize(opened_dt)
+                if opened_dt.astimezone(_WIB).date() == today:
+                    count += 1
+            except Exception:
+                pass
+        return count
 
     @staticmethod
     def _calc_pnl(is_long: bool, entry: float, exit_price: float, notional: float) -> float:

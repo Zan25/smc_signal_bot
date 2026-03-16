@@ -45,50 +45,66 @@ def _find_tp_levels(
     structure_4h: dict,
     current_price: float,
     direction: str,
+    sl_dist: float = 0.0,
 ) -> tuple[float | None, float | None]:
     """
     Find TP1 and TP2 from swing structure.
 
     TP1 = nearest swing level in direction of trade
-    TP2 = further swing level (major HTF swing high/low)
+    TP2 = next swing level, capped at 6× SL distance (realistic for 8-24h horizon)
+
+    With 10x leverage, 6× SL distance = 60× return vs SL — still a meaningful target.
+    This prevents TP2 from being set at unreachable historical ATH levels.
     """
+    # Cap: TP must be within 6× SL distance from entry
+    # If sl_dist not provided, fallback to 3% of price
+    sl_dist = sl_dist if sl_dist > 0 else current_price * 0.03
+    max_move = 6.0 * sl_dist
+
     if direction == "bullish":
-        # Look for resistance levels above current price
+        tp_cap = current_price + max_move
         candidates = []
         for sh in structure_4h.get("all_swing_highs", []):
-            if sh > current_price:
+            if current_price < sh <= tp_cap:
                 candidates.append(sh)
         for sh in structure_htf.get("all_swing_highs", []):
-            if sh > current_price:
+            if current_price < sh <= tp_cap:
                 candidates.append(sh)
 
         candidates = sorted(set(candidates))
         if len(candidates) >= 2:
-            return candidates[0], candidates[-1]
+            tp1 = candidates[0]
+            tp2 = candidates[1]  # second nearest (not furthest)
+            return tp1, tp2
         elif len(candidates) == 1:
-            return candidates[0], candidates[0] * 1.015  # fallback: 1.5% above
+            tp1 = candidates[0]
+            tp2 = min(tp1 + (tp1 - current_price), tp_cap)  # extend by TP1 distance
+            return tp1, tp2
         else:
-            # Fallback targets calibrated for 10x leverage (0.8% and 2% moves)
-            return current_price * 1.008, current_price * 1.020
+            # No structural level in range — use 1.5× and 3× SL as fallback
+            return current_price + 1.5 * sl_dist, current_price + 3.0 * sl_dist
 
     else:  # bearish
-        # Look for support levels below current price
+        tp_cap = current_price - max_move
         candidates = []
-        for sl in structure_4h.get("all_swing_lows", []):
-            if sl < current_price:
-                candidates.append(sl)
-        for sl in structure_htf.get("all_swing_lows", []):
-            if sl < current_price:
-                candidates.append(sl)
+        for sl_lvl in structure_4h.get("all_swing_lows", []):
+            if tp_cap <= sl_lvl < current_price:
+                candidates.append(sl_lvl)
+        for sl_lvl in structure_htf.get("all_swing_lows", []):
+            if tp_cap <= sl_lvl < current_price:
+                candidates.append(sl_lvl)
 
         candidates = sorted(set(candidates), reverse=True)
         if len(candidates) >= 2:
-            return candidates[0], candidates[-1]
+            tp1 = candidates[0]
+            tp2 = candidates[1]  # second nearest (not furthest)
+            return tp1, tp2
         elif len(candidates) == 1:
-            return candidates[0], candidates[0] * 0.985
+            tp1 = candidates[0]
+            tp2 = max(tp1 - (current_price - tp1), tp_cap)
+            return tp1, tp2
         else:
-            # Fallback targets calibrated for 10x leverage (0.8% and 2% moves)
-            return current_price * 0.992, current_price * 0.980
+            return current_price - 1.5 * sl_dist, current_price - 3.0 * sl_dist
 
 
 def _build_reasons(
@@ -370,7 +386,8 @@ def analyze_pair(
 
     # TP reference = outer edge of entry zone so TP is always outside the zone
     tp_reference = entry_high if is_long else entry_low
-    tp1, tp2 = _find_tp_levels(struct_htf_top, struct_ob, tp_reference, htf_direction)
+    sl_dist = abs(entry - sl)
+    tp1, tp2 = _find_tp_levels(struct_htf_top, struct_ob, tp_reference, htf_direction, sl_dist)
     if tp1 is None or tp2 is None:
         logger.info(f"{symbol}: Could not determine TP levels — skipping")
         return setups
