@@ -151,19 +151,21 @@ class PaperTrader:
                 return None
 
             risk_amount = balance * PAPER_RISK_PCT
-            # notional = risk / (sl_pct × leverage)  → so that sl_pct × leverage × notional = risk
-            position_notional = risk_amount / (sl_dist_pct * PAPER_LEVERAGE)
-            margin_used = position_notional / PAPER_LEVERAGE
+            # Correct formula:
+            #   margin × leverage × sl_pct = risk_amount
+            #   → margin = risk_amount / (leverage × sl_pct)
+            #   → position_size = margin × leverage
+            margin_used = risk_amount / (PAPER_LEVERAGE * sl_dist_pct)
 
             # Cap margin to PAPER_MAX_MARGIN_PCT of balance
             max_margin = balance * PAPER_MAX_MARGIN_PCT
             if margin_used > max_margin:
                 margin_used = max_margin
-                position_notional = margin_used * PAPER_LEVERAGE
                 # Recalculate actual risk at capped size
-                risk_amount = position_notional * sl_dist_pct * PAPER_LEVERAGE
+                risk_amount = margin_used * PAPER_LEVERAGE * sl_dist_pct
 
-            qty = position_notional / entry
+            position_size_usd = margin_used * PAPER_LEVERAGE   # total exposure
+            qty = position_size_usd / entry
 
             now = datetime.now(tz=_WIB)
             position = {
@@ -177,7 +179,7 @@ class PaperTrader:
                 "tp2": round(tp2, 6),
                 "qty": round(qty, 6),
                 "qty_remaining": round(qty, 6),
-                "position_notional": round(position_notional, 4),
+                "position_size_usd": round(position_size_usd, 4),
                 "margin_used": round(margin_used, 4),
                 "leverage": PAPER_LEVERAGE,
                 "risk_amount": round(risk_amount, 4),
@@ -195,8 +197,8 @@ class PaperTrader:
             self._save_state()
             logger.info(
                 f"[PAPER] Opened {symbol} {direction} @ {entry:.4f} | "
-                f"margin=${margin_used:.2f}, risk=${risk_amount:.2f}, "
-                f"qty={qty:.6f}, strategy={strategy}"
+                f"margin=${margin_used:.2f}, pos=${position_size_usd:.2f}, "
+                f"risk=${risk_amount:.2f}, qty={qty:.6f}, strategy={strategy}"
             )
             return position
 
@@ -235,10 +237,10 @@ class PaperTrader:
                 sl = pos["sl"]
                 entry = pos["entry_price"]
                 qty_remaining = pos["qty_remaining"]
-                position_notional = pos["position_notional"]
-                # Remaining notional (after potential partial close at TP1)
+                position_size_usd = pos.get("position_size_usd") or pos.get("position_notional", 0) * PAPER_LEVERAGE
+                # Remaining position size (after potential partial close at TP1)
                 fraction_remaining = qty_remaining / pos["qty"] if pos["qty"] > 0 else 1.0
-                remaining_notional = position_notional * fraction_remaining
+                remaining_size_usd = position_size_usd * fraction_remaining
 
                 closed_now = False
                 exit_reason = None
@@ -251,10 +253,7 @@ class PaperTrader:
                     age_hours = (datetime.now(tz=_WIB) - opened_dt).total_seconds() / 3600
                     max_hours = _MAX_DURATION_HOURS.get(pos.get("strategy", "intraday"), 24)
                     if age_hours >= max_hours:
-                        # Close at current price, calculate P&L on remaining notional
-                        fraction = pos["qty_remaining"] / pos["qty"] if pos["qty"] > 0 else 1.0
-                        exp_notional = position_notional * fraction
-                        pnl_exp = self._calc_pnl(is_long, entry, current_price, exp_notional)
+                        pnl_exp = self._calc_pnl(is_long, entry, current_price, remaining_size_usd)
                         pos["realized_pnl"] += pnl_exp
                         pos["status"] = "closed"
                         pos["exit_price"] = current_price
@@ -278,8 +277,7 @@ class PaperTrader:
                     tp1_hit = (is_long and current_price >= tp1) or (not is_long and current_price <= tp1)
                     if tp1_hit:
                         # Partial close: 50% of position
-                        half_notional = position_notional * 0.5
-                        pnl_partial = self._calc_pnl(is_long, entry, tp1, half_notional)
+                        pnl_partial = self._calc_pnl(is_long, entry, tp1, position_size_usd * 0.5)
                         pos["realized_pnl"] += pnl_partial
                         pos["qty_remaining"] = round(pos["qty"] * 0.5, 6)
                         pos["tp1_hit"] = True
@@ -306,11 +304,11 @@ class PaperTrader:
                     sl_hit = (is_long and current_price <= sl) or (not is_long and current_price >= sl)
 
                     if tp2_hit:
-                        pnl_final = self._calc_pnl(is_long, entry, tp2, remaining_notional)
+                        pnl_final = self._calc_pnl(is_long, entry, tp2, remaining_size_usd)
                         exit_reason = EXIT_TP2
                         exit_price = tp2
                     elif sl_hit:
-                        pnl_final = self._calc_pnl(is_long, entry, sl, remaining_notional)
+                        pnl_final = self._calc_pnl(is_long, entry, sl, remaining_size_usd)
                         exit_reason = EXIT_SL_BE  # SL at breakeven
                         exit_price = sl
                     else:
@@ -340,11 +338,11 @@ class PaperTrader:
                     sl_hit = (is_long and current_price <= sl) or (not is_long and current_price >= sl)
 
                     if tp2_hit:
-                        pnl = self._calc_pnl(is_long, entry, tp2, position_notional)
+                        pnl = self._calc_pnl(is_long, entry, tp2, position_size_usd)
                         exit_reason = EXIT_TP2
                         exit_price = tp2
                     elif sl_hit:
-                        pnl = self._calc_pnl(is_long, entry, sl, position_notional)
+                        pnl = self._calc_pnl(is_long, entry, sl, position_size_usd)
                         exit_reason = EXIT_SL
                         exit_price = sl
                     else:
@@ -526,13 +524,15 @@ class PaperTrader:
         return count
 
     @staticmethod
-    def _calc_pnl(is_long: bool, entry: float, exit_price: float, notional: float) -> float:
-        """Calculate realized P&L for a position using leverage."""
+    def _calc_pnl(is_long: bool, entry: float, exit_price: float, position_size_usd: float) -> float:
+        """Calculate realized P&L.
+        position_size_usd = margin × leverage (total exposure).
+        P&L = price_change% × position_size. No extra leverage factor needed.
+        """
         price_change_pct = (exit_price - entry) / entry
         if not is_long:
             price_change_pct = -price_change_pct
-        pnl = price_change_pct * notional * PAPER_LEVERAGE
-        return round(pnl, 4)
+        return round(price_change_pct * position_size_usd, 4)
 
     def _update_peak(self) -> None:
         """Update peak balance tracker (for drawdown calculation)."""
