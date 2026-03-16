@@ -91,120 +91,140 @@ class TelegramAlerter:
         return self._send(message)
 
     def send_paper_entry(self, position: dict) -> bool:
-        """Send Telegram notification when a paper trade is opened."""
+        """Send Telegram notification when a paper trade is opened (order filled)."""
         is_long = position["direction"] == "LONG"
-        emoji = "🟢" if is_long else "🔴"
-        dir_label = position["direction"]
-        strategy_map = {"swing": "📈 Swing", "intraday": "⏱️ Intraday", "scalp": "⚡ Scalping"}
+        order_type = "LIMIT BUY" if is_long else "LIMIT SELL"
+        dir_emoji = "🟢" if is_long else "🔴"
+        strategy_map = {"swing": "📈 Swing (24j)", "intraday": "⏱️ Intraday (8j)", "scalp": "⚡ Scalp (4j)"}
         strategy_label = strategy_map.get(position.get("strategy", ""), position.get("strategy", ""))
 
         def fmt(p: float) -> str:
             if p >= 1000:
-                return f"${p:,.2f}"
+                return f"{p:,.2f}"
             elif p >= 1:
-                return f"${p:.4f}"
+                return f"{p:.4f}"
             else:
-                return f"${p:.6f}"
+                return f"{p:.6f}"
 
         entry = position["entry_price"]
-        sl = position["sl"]
-        sl_pct = abs(entry - sl) / entry * 100
+        sl    = position["sl"]
+        tp1   = position["tp1"]
+        tp2   = position["tp2"]
+        sl_pct  = abs(entry - sl) / entry * 100
+        tp1_pct = abs(tp1 - entry) / entry * 100
+        tp2_pct = abs(tp2 - entry) / entry * 100
+
+        margin   = position["margin_used"]
+        pos_size = position.get("position_size_usd", margin * position.get("leverage", 10))
+        risk     = position["risk_amount"]
+
         opened_at = position.get("opened_at", "")
         try:
-            ts_str = datetime.fromisoformat(opened_at).strftime("%Y-%m-%d %H:%M %Z")
+            ts_str = datetime.fromisoformat(opened_at).strftime("%d/%m/%Y %H:%M WIB")
         except Exception:
             ts_str = str(opened_at)
 
         msg = (
-            f"💼 *PAPER TRADE ENTRY*\n"
+            f"✅ *ORDER TERISI — {order_type}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{emoji} *{position['symbol']} {dir_label}* — {strategy_label}\n"
-            f"💰 Entry: `{fmt(entry)}`\n"
-            f"🛑 SL: `{fmt(sl)}` (-{sl_pct:.2f}%)\n"
-            f"✅ TP1: `{fmt(position['tp1'])}` | TP2: `{fmt(position['tp2'])}`\n"
-            f"📊 Leverage: {position['leverage']}x | Qty: {position['qty']:.5f}\n"
-            f"💵 Margin: ${position['margin_used']:.2f} | Risk: ${position['risk_amount']:.2f} ({position['risk_amount']/max(position['margin_used']*position['leverage'],0.01)*100:.0f}%)\n"
-            f"⚡ RR: 1:{position['rr']:.1f} | Score: {position['score']}/8\n"
-            f"📈 Balance: ${position.get('balance_at_open', '?')}\n"
+            f"{dir_emoji} *{position['symbol']} {position['direction']}* • {strategy_label}\n"
+            f"\n"
+            f"💰 *Entry:* `{fmt(entry)}`\n"
+            f"🛑 *Stop Loss:* `{fmt(sl)}` (-{sl_pct:.1f}%) → *CUT LOSS DI SINI*\n"
+            f"🎯 *TP1:* `{fmt(tp1)}` (+{tp1_pct:.1f}%) → *JUAL 50%*\n"
+            f"✅ *TP2:* `{fmt(tp2)}` (+{tp2_pct:.1f}%) → *JUAL SISA*\n"
+            f"\n"
+            f"📊 Leverage: {position['leverage']}x | RR: 1:{position['rr']:.1f} | Score: {position['score']}/8\n"
+            f"💵 Margin: *${margin:.2f}* | Posisi: ${pos_size:.0f} | Risk: ${risk:.2f}\n"
+            f"💼 Balance: *${position.get('balance_at_open', '?')}*\n"
             f"⏰ {ts_str}"
         )
         return self._send(msg)
 
     def send_paper_exit(self, position: dict, reason: str) -> bool:
-        """Send Telegram notification when a paper trade is closed (or partial TP1)."""
+        """Send copy-trade-ready exit notification for paper trade."""
         is_long = position["direction"] == "LONG"
-        is_win = position.get("exit_pnl", 0) >= 0
-        is_partial = position.get("partial", False)
-
-        if reason == "TP1_HIT":
-            status_emoji = "🎯"
-            status_label = "TP1 HIT — 50% CLOSED, SL → Breakeven"
-        elif reason == "TP2_HIT":
-            status_emoji = "✅"
-            status_label = "TP2 HIT — FULL CLOSE 🏆"
-        elif reason == "SL_HIT_BE":
-            status_emoji = "↩️"
-            status_label = "SL HIT — Breakeven (modal aman)"
-        elif reason == "EXPIRED":
-            status_emoji = "⏳"
-            status_label = "EXPIRED — Auto Cancel"
-        else:
-            status_emoji = "❌"
-            status_label = "SL HIT — Loss"
-
+        close_side = "CLOSE LONG" if is_long else "CLOSE SHORT"
         dir_emoji = "🟢" if is_long else "🔴"
-        pnl = position.get("exit_pnl", 0)
-        pnl_sign = "+" if pnl >= 0 else ""
+
+        pnl   = position.get("exit_pnl", 0)
+        pnl_sign  = "+" if pnl >= 0 else ""
         pnl_emoji = "📈" if pnl >= 0 else "📉"
 
         def fmt(p: float) -> str:
             if p >= 1000:
-                return f"${p:,.2f}"
+                return f"{p:,.2f}"
             elif p >= 1:
-                return f"${p:.4f}"
+                return f"{p:.4f}"
             else:
-                return f"${p:.6f}"
+                return f"{p:.6f}"
 
-        entry = position["entry_price"]
+        entry      = position["entry_price"]
         exit_price = position.get("exit_price", entry)
+        balance_after = position.get("balance_after", "?")
 
-        # Duration
         try:
             opened = datetime.fromisoformat(position["opened_at"])
             closed = datetime.fromisoformat(position["exit_at"])
-            delta = closed - opened
-            hours = int(delta.total_seconds() // 3600)
-            minutes = int((delta.total_seconds() % 3600) // 60)
-            duration_str = f"{hours}j {minutes}m"
+            delta  = closed - opened
+            h = int(delta.total_seconds() // 3600)
+            m = int((delta.total_seconds() % 3600) // 60)
+            duration_str = f"{h}j {m}m"
         except Exception:
             duration_str = "?"
 
         try:
-            ts_str = datetime.fromisoformat(position["exit_at"]).strftime("%Y-%m-%d %H:%M %Z")
+            ts_str = datetime.fromisoformat(position["exit_at"]).strftime("%d/%m/%Y %H:%M WIB")
         except Exception:
             ts_str = "?"
 
-        balance_after = position.get("balance_after", "?")
-        strategy_map = {"swing": "📈 Swing", "intraday": "⏱️ Intraday", "scalp": "⚡ Scalping"}
-        strategy_label = strategy_map.get(position.get("strategy", ""), position.get("strategy", ""))
-
-        # For TP1 partial: note that position is still half-open
-        note_line = ""
         if reason == "TP1_HIT":
-            note_line = f"\n📌 _Sisa 50% masih open, SL dipindah ke entry (breakeven)_"
+            header   = "🎯 *TAKE PROFIT 1 HIT*"
+            action   = f"📤 *{close_side} 50%* @ `{fmt(exit_price)}`"
+            be_entry = fmt(entry)
+            note     = (
+                f"📌 SL dipindah → `{be_entry}` *(breakeven)*\n"
+                f"📌 Sisa 50% masih *OPEN*, tunggu TP2"
+            )
+
+        elif reason == "TP2_HIT":
+            header = "✅ *TAKE PROFIT 2 HIT — FULL CLOSE*"
+            action = f"📤 *{close_side} SISA 50%* @ `{fmt(exit_price)}`"
+            note   = f"🏆 Posisi *SELESAI* — ambil profit!"
+
+        elif reason == "SL_HIT_BE":
+            header = "↩️ *BREAKEVEN EXIT*"
+            action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}`"
+            note   = "💼 Modal *AMAN* — tidak rugi tidak untung"
+
+        elif reason == "SL_HIT":
+            header = "❌ *STOP LOSS HIT*"
+            action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}`"
+            note   = "🛑 CUT LOSS dieksekusi"
+
         elif reason == "EXPIRED":
-            max_h = {"scalp": 4, "intraday": 8, "swing": 24}.get(position.get("strategy", "intraday"), 24)
-            note_line = f"\n📌 _Posisi ditutup otomatis setelah {max_h}j tanpa TP/SL hit_"
+            max_h  = {"scalp": 4, "intraday": 8, "swing": 24}.get(position.get("strategy", "intraday"), 24)
+            header = f"⏳ *AUTO CLOSE — Waktu Habis ({max_h}j)*"
+            action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}` *(market price)*"
+            note   = "⏰ Posisi ditutup otomatis — tidak ada TP/SL yang tersentuh"
+
+        else:
+            header = "📤 *POSITION CLOSED*"
+            action = f"📤 *{close_side}* @ `{fmt(exit_price)}`"
+            note   = ""
 
         msg = (
-            f"📤 *PAPER TRADE EXIT*\n"
+            f"{header}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{dir_emoji} *{position['symbol']} {position['direction']}* [{strategy_label}]\n"
-            f"{status_emoji} {status_label}\n"
+            f"{dir_emoji} *{position['symbol']} {position['direction']}*\n"
+            f"\n"
+            f"{action}\n"
             f"💰 Entry: `{fmt(entry)}` → Exit: `{fmt(exit_price)}`\n"
             f"{pnl_emoji} P&L: *{pnl_sign}${pnl:.2f}*\n"
-            f"📊 Leverage: {position['leverage']}x | Durasi: {duration_str}\n"
-            f"💵 Balance: ${balance_after}{note_line}\n"
+            f"\n"
+            f"{note}\n"
+            f"\n"
+            f"💼 Balance: *${balance_after}* | Durasi: {duration_str}\n"
             f"⏰ {ts_str}"
         )
         return self._send(msg)
@@ -336,43 +356,54 @@ class TelegramAlerter:
     # ─── Formatters ────────────────────────────────────────────────────────────
 
     def _format_signal(self, setup: dict) -> str:
-        """Format a trading setup into a Telegram message string."""
+        """Format a trading setup — shows exactly what limit order to place."""
         is_long = setup["direction"] == "LONG"
-        emoji = "🟢" if is_long else "🔴"
-        dir_label = "LONG" if is_long else "SHORT"
+        dir_emoji   = "🟢" if is_long else "🔴"
+        order_type  = "LIMIT BUY" if is_long else "LIMIT SELL"
+        dir_label   = "LONG" if is_long else "SHORT"
 
         confidence = setup["confidence"]
-        max_score = 8
-        stars = "⭐" * min(confidence, max_score) + "☆" * max(0, max_score - confidence)
+        stars = "⭐" * min(confidence, 8) + "☆" * max(0, 8 - confidence)
 
-        reasons_text = "\n".join(f"• {r}" for r in setup["reasons"])
-
-        ts = setup["timestamp"]
-        if isinstance(ts, datetime):
-            ts_str = ts.strftime("%Y-%m-%d %H:%M %Z")
-        else:
-            ts_str = str(ts)
-
-        # Format numbers based on price magnitude
         def fmt(price: float) -> str:
             if price >= 1000:
-                return f"${price:,.2f}"
+                return f"{price:,.2f}"
             elif price >= 1:
-                return f"${price:.4f}"
+                return f"{price:.4f}"
             else:
-                return f"${price:.6f}"
+                return f"{price:.6f}"
+
+        ts = setup["timestamp"]
+        ts_str = ts.strftime("%d/%m/%Y %H:%M WIB") if isinstance(ts, datetime) else str(ts)
 
         strategy_emoji = setup.get("strategy_emoji", "📊")
         strategy_label = setup.get("strategy_label", "")
+        reasons_text   = "\n".join(f"• {r}" for r in setup["reasons"])
+
+        entry_low  = setup["entry_low"]
+        entry_high = setup["entry_high"]
+        entry_mid  = setup["entry_mid"]
+        sl   = setup["sl"]
+        tp1  = setup["tp1"]
+        tp2  = setup["tp2"]
+        sl_pct  = abs(entry_mid - sl) / entry_mid * 100
+        tp1_pct = abs(tp1 - entry_mid) / entry_mid * 100
+        tp2_pct = abs(tp2 - entry_mid) / entry_mid * 100
 
         msg = (
-            f"{emoji} *{setup['symbol']} {dir_label}* {strategy_emoji} {strategy_label}\n"
+            f"📡 *{order_type} — {setup['symbol']}* {dir_emoji}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 Entry: `{fmt(setup['entry_low'])} - {fmt(setup['entry_high'])}`\n"
-            f"🛑 SL: `{fmt(setup['sl'])}`\n"
-            f"✅ TP1: `{fmt(setup['tp1'])}` TP2: `{fmt(setup['tp2'])}`\n"
-            f"📐 RR: *1:{setup['rr_tp2']:.1f}* {stars} {confidence}/{max_score}\n"
-            f"⚡ Leverage rekomendasi: 10x\n"
+            f"{strategy_emoji} {strategy_label} | {stars} {confidence}/8\n"
+            f"\n"
+            f"📌 *PASANG {order_type}:*\n"
+            f"Zone: `{fmt(entry_low)} – {fmt(entry_high)}`\n"
+            f"Mid: `{fmt(entry_mid)}`\n"
+            f"\n"
+            f"🛑 *Stop Loss:* `{fmt(sl)}` (-{sl_pct:.1f}%)\n"
+            f"🎯 *TP1:* `{fmt(tp1)}` (+{tp1_pct:.1f}%) → *JUAL 50%*\n"
+            f"✅ *TP2:* `{fmt(tp2)}` (+{tp2_pct:.1f}%) → *JUAL SISA*\n"
+            f"\n"
+            f"📐 RR: *1:{setup['rr_tp2']:.1f}* | Leverage: 10x\n"
             f"📈 Trend: {setup['htf_trend']}\n"
             f"📋 {reasons_text}\n"
             f"⏰ {ts_str}"
