@@ -392,16 +392,17 @@ def analyze_pair(
         logger.info(f"{symbol}: Could not determine TP levels — skipping")
         return setups
 
-    # Cap TPs by strategy time horizon — prevents unreachable historical ATH targets
-    # swing (24h): max 4% move  |  intraday (8h): max 2%  |  scalp (4h): max 1%
-    _MAX_TP_PCT = {"swing": 0.04, "intraday": 0.02, "scalp": 0.01}
-    max_tp_pct = _MAX_TP_PCT.get(strategy.get("name", "swing"), 0.04)
+    # Cap TPs by strategy time horizon — use current_price as basis (NOT entry_high/low
+    # which can be a historical OB boundary from months ago, causing TP2 = 14.39 on LINK)
+    # swing (24h): max 8%  |  intraday (8h): max 4%  |  scalp: max 1.5%
+    _MAX_TP_PCT = {"swing": 0.08, "intraday": 0.04, "scalp": 0.015}
+    max_tp_pct = _MAX_TP_PCT.get(strategy.get("name", "swing"), 0.08)
     if is_long:
-        tp1 = min(tp1, tp_reference * (1 + max_tp_pct * 0.5))
-        tp2 = min(tp2, tp_reference * (1 + max_tp_pct))
+        tp1 = min(tp1, current_price * (1 + max_tp_pct * 0.4))
+        tp2 = min(tp2, current_price * (1 + max_tp_pct))
     else:
-        tp1 = max(tp1, tp_reference * (1 - max_tp_pct * 0.5))
-        tp2 = max(tp2, tp_reference * (1 - max_tp_pct))
+        tp1 = max(tp1, current_price * (1 - max_tp_pct * 0.4))
+        tp2 = max(tp2, current_price * (1 - max_tp_pct))
 
     # ── 10. Validate SL position and distance ────────────────────────────────
     # SL must be OUTSIDE the full zone (use _sl_zone, not CE entry_low/high)

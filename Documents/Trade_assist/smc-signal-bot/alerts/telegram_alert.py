@@ -398,6 +398,7 @@ class TelegramAlerter:
             f"📌 *PASANG {order_type}:*\n"
             f"Zone: `{fmt(entry_low)} – {fmt(entry_high)}`\n"
             f"Mid: `{fmt(entry_mid)}`\n"
+            f"Pasar: `{fmt(setup.get('current_price', entry_mid))}`\n"
             f"\n"
             f"🛑 *Stop Loss:* `{fmt(sl)}` (-{sl_pct:.1f}%)\n"
             f"🎯 *TP1:* `{fmt(tp1)}` (+{tp1_pct:.1f}%) → *JUAL 50%*\n"

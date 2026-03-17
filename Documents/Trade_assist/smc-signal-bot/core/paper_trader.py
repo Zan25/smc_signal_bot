@@ -17,10 +17,9 @@ import pytz
 from config.settings import (
     PAPER_INITIAL_BALANCE,
     PAPER_LEVERAGE,
-    PAPER_RISK_PCT,
     PAPER_MAX_POSITIONS,
     PAPER_MAX_DAILY_TRADES,
-    PAPER_MAX_MARGIN_PCT,
+    PAPER_MARGIN_PER_TRADE_PCT,
     PAPER_STATE_FILE,
     TIMEZONE,
 )
@@ -69,7 +68,7 @@ class PaperTrader:
             f"[PAPER] Initialized — balance=${self._state['balance']:.2f}, "
             f"open={len(self._state['open_positions'])} positions | "
             f"max {PAPER_MAX_DAILY_TRADES} trades/day, {PAPER_MAX_POSITIONS} concurrent, "
-            f"10x leverage, risk={int(PAPER_RISK_PCT*100)}%/trade"
+            f"10x leverage, margin={int(PAPER_MARGIN_PER_TRADE_PCT*100)}%/trade"
         )
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -144,27 +143,18 @@ class PaperTrader:
 
             balance = self._state["balance"]
 
-            # Position sizing
+            # Position sizing — fixed allocation: 1/3 balance per trade
             sl_dist_pct = abs(entry - sl) / entry
             if sl_dist_pct < 0.0001:
                 logger.warning(f"[PAPER] Skip {symbol}: SL distance too small ({sl_dist_pct:.4%})")
                 return None
 
-            risk_amount = balance * PAPER_RISK_PCT
-            # Correct formula:
-            #   margin × leverage × sl_pct = risk_amount
-            #   → margin = risk_amount / (leverage × sl_pct)
-            #   → position_size = margin × leverage
-            margin_used = risk_amount / (PAPER_LEVERAGE * sl_dist_pct)
-
-            # Cap margin to PAPER_MAX_MARGIN_PCT of balance
-            max_margin = balance * PAPER_MAX_MARGIN_PCT
-            if margin_used > max_margin:
-                margin_used = max_margin
-                # Recalculate actual risk at capped size
-                risk_amount = margin_used * PAPER_LEVERAGE * sl_dist_pct
-
-            position_size_usd = margin_used * PAPER_LEVERAGE   # total exposure
+            # Fixed margin = 33% of balance per position → meaningful size
+            # With 10x leverage: $33 margin → $330 exposure
+            margin_used = balance * PAPER_MARGIN_PER_TRADE_PCT
+            margin_used = min(margin_used, balance * 0.40)        # hard cap 40% balance
+            position_size_usd = margin_used * PAPER_LEVERAGE      # total exposure
+            risk_amount = position_size_usd * sl_dist_pct         # actual $ risk
             qty = position_size_usd / entry
 
             now = datetime.now(tz=_WIB)
