@@ -73,12 +73,14 @@ class PaperTrader:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def open_position(self, setup: dict) -> dict | None:
+    def open_position(self, setup: dict, force: bool = False) -> dict | None:
         """
         Try to open a paper trade based on a signal setup dict.
 
         Args:
             setup: Canonical setup dict from entry_engine.analyze_pair()
+            force: If True (forced scan), relax zone check to near-zone (within 2%)
+                   so forced scans can still open at market when price is just outside OB zone.
 
         Returns:
             Position dict if opened, None if skipped (max positions, duplicate, etc.)
@@ -118,14 +120,34 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
-            # Guard: current price must be INSIDE the entry zone [entry_low, entry_high]
-            # If price has moved away from the zone, the signal is stale — don't open
-            if current_price < entry_low or current_price > entry_high:
-                logger.info(
-                    f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
-                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
-                )
-                return None
+            # Guard: price zone check
+            # Normal scan: price must be INSIDE the OB zone [entry_low, entry_high]
+            # Forced scan: allow near-zone (within 2%) so forced scans can enter at market
+            #   even when price is slightly above/below the narrow OB zone
+            in_zone = entry_low <= current_price <= entry_high
+            if not in_zone:
+                if force:
+                    # Near-zone check for forced scan: within 2% of zone boundary
+                    zone_span = max(entry_high - entry_low, entry_low * 0.001)
+                    near_low  = entry_low  - zone_span * 2
+                    near_high = entry_high + zone_span * 2
+                    near_zone = near_low <= current_price <= near_high
+                    if not near_zone:
+                        logger.info(
+                            f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
+                            f"too far from zone [{entry_low:.4f}-{entry_high:.4f}] even for forced"
+                        )
+                        return None
+                    logger.info(
+                        f"[PAPER] Near-zone entry {symbol} {direction}: price {current_price:.4f} "
+                        f"vs zone [{entry_low:.4f}-{entry_high:.4f}] (forced)"
+                    )
+                else:
+                    logger.info(
+                        f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
+                        f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
+                    )
+                    return None
 
             # Fill at current market price (market fill when price enters zone)
             # entry_mid is a historical OB midpoint — using current_price is more realistic

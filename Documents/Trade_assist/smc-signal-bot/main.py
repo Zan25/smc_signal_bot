@@ -257,7 +257,7 @@ def _run_forced_scan_tier(strategy: dict, needed: int, tier_label: str) -> int:
                 continue
             setups = entry_engine.analyze_pair(pair, mtf_data, strategy)
             for setup in setups:
-                position = _paper_trader.open_position(setup)
+                position = _paper_trader.open_position(setup, force=True)
                 if position:
                     status = _paper_trader.get_status()
                     position["balance_at_open"] = f"{status['balance']:.2f}"
