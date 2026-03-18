@@ -203,10 +203,15 @@ class TelegramAlerter:
             note   = "🛑 CUT LOSS dieksekusi"
 
         elif reason == "EXPIRED":
-            max_h  = {"scalp": 4, "intraday": 8, "swing": 24}.get(position.get("strategy", "intraday"), 24)
+            max_h  = {"scalp": 4, "intraday": 6, "swing": 8}.get(position.get("strategy", "intraday"), 8)
             header = f"⏳ *AUTO CLOSE — Waktu Habis ({max_h}j)*"
             action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}` *(market price)*"
             note   = "⏰ Posisi ditutup otomatis — tidak ada TP/SL yang tersentuh"
+
+        elif reason == "EXIT_EOD":
+            header = "🌙 *END OF DAY CLOSE*"
+            action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}` *(market price)*"
+            note   = "📅 Posisi ditutup otomatis 22:00 WIB — tidak ada posisi lintas hari"
 
         else:
             header = "📤 *POSITION CLOSED*"

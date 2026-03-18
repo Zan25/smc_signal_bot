@@ -40,8 +40,8 @@ EXIT_EXPIRED = "EXPIRED"  # Position auto-closed after max duration
 # Kept short so positions close daily and simulation stays realistic
 _MAX_DURATION_HOURS: dict[str, int] = {
     "scalp": 4,
-    "intraday": 8,
-    "swing": 24,
+    "intraday": 6,   # 8h → 6h: posisi harus close same-day
+    "swing": 8,      # 24h → 8h: posisi harus close same-day
 }
 
 
@@ -73,17 +73,15 @@ class PaperTrader:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def open_position(self, setup: dict, force: bool = False) -> dict | None:
+    def open_position(self, setup: dict) -> dict | None:
         """
         Try to open a paper trade based on a signal setup dict.
 
-        Args:
-            setup: Canonical setup dict from entry_engine.analyze_pair()
-            force: If True (forced scan), relax zone check to near-zone (within 2%)
-                   so forced scans can still open at market when price is just outside OB zone.
+        Entry hanya dibuka jika harga pasar saat ini berada di dalam zona OB/FVG.
+        Tidak ada forced entry — posisi terbuka organik dari scan reguler.
 
         Returns:
-            Position dict if opened, None if skipped (max positions, duplicate, etc.)
+            Position dict if opened, None if skipped (max positions, duplicate, stale zone)
         """
         with self._lock:
             symbol = setup["symbol"]
@@ -120,34 +118,13 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
-            # Guard: price zone check
-            # Normal scan: price must be INSIDE the OB zone [entry_low, entry_high]
-            # Forced scan: allow near-zone (within 2%) so forced scans can enter at market
-            #   even when price is slightly above/below the narrow OB zone
-            in_zone = entry_low <= current_price <= entry_high
-            if not in_zone:
-                if force:
-                    # Near-zone check for forced scan: within 2% of zone boundary
-                    zone_span = max(entry_high - entry_low, entry_low * 0.001)
-                    near_low  = entry_low  - zone_span * 2
-                    near_high = entry_high + zone_span * 2
-                    near_zone = near_low <= current_price <= near_high
-                    if not near_zone:
-                        logger.info(
-                            f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
-                            f"too far from zone [{entry_low:.4f}-{entry_high:.4f}] even for forced"
-                        )
-                        return None
-                    logger.info(
-                        f"[PAPER] Near-zone entry {symbol} {direction}: price {current_price:.4f} "
-                        f"vs zone [{entry_low:.4f}-{entry_high:.4f}] (forced)"
-                    )
-                else:
-                    logger.info(
-                        f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
-                        f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
-                    )
-                    return None
+            # Guard: harga harus di dalam zona OB/FVG — signal stale jika sudah keluar zona
+            if current_price < entry_low or current_price > entry_high:
+                logger.info(
+                    f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
+                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
+                )
+                return None
 
             # Fill at current market price (market fill when price enters zone)
             # entry_mid is a historical OB midpoint — using current_price is more realistic
@@ -480,6 +457,57 @@ class PaperTrader:
         """Hitung posisi yang dibuka hari ini (open + closed combined)."""
         with self._lock:
             return self._count_today_trades()
+
+    def close_all_eod(self, fetcher) -> list[tuple[dict, float]]:
+        """
+        Tutup semua posisi terbuka di akhir hari (22:00 WIB).
+        Dipanggil oleh scheduler agar tidak ada posisi yang melewati hari berikutnya.
+
+        Returns:
+            List of (closed_position_dict, exit_price) for each position closed.
+        """
+        closed_list = []
+        with self._lock:
+            still_open = []
+            for pos in self._state["open_positions"]:
+                symbol = pos["symbol"]
+                perp_sym = f"{symbol.replace('/USDT', '')}/USDT:USDT"
+                try:
+                    current_price = fetcher.get_current_price(perp_sym)
+                except Exception:
+                    current_price = None
+
+                if current_price is None:
+                    still_open.append(pos)
+                    logger.warning(f"[PAPER EOD] {symbol}: gagal ambil harga, posisi tetap open")
+                    continue
+
+                is_long = pos["direction"] == "LONG"
+                entry = pos["entry_price"]
+                qty_remaining = pos.get("qty_remaining", pos["qty"])
+                position_size_usd = pos.get("position_size_usd", 0)
+                fraction_remaining = qty_remaining / pos["qty"] if pos["qty"] > 0 else 1.0
+                remaining_size_usd = position_size_usd * fraction_remaining
+
+                pnl = self._calc_pnl(is_long, entry, current_price, remaining_size_usd)
+                pos["realized_pnl"] = pos.get("realized_pnl", 0.0) + pnl
+                pos["status"] = "closed"
+                pos["exit_price"] = current_price
+                pos["exit_pnl"] = pos["realized_pnl"]
+                pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
+                pos["exit_reason"] = "EXIT_EOD"
+                pos["partial"] = False
+                self._state["balance"] += pnl
+                self._state["closed_positions"].append(pos)
+                closed_list.append((pos, current_price))
+                logger.info(
+                    f"[PAPER EOD] Closed {symbol} {pos['direction']} @ {current_price:.4f} | "
+                    f"PnL=${pnl:.2f}"
+                )
+
+            self._state["open_positions"] = still_open
+            self._save_state()
+        return closed_list
 
     def get_daily_summary(self) -> dict:
         """Ambil statistik trading hari ini untuk daily summary Telegram notification."""

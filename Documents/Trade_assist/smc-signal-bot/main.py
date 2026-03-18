@@ -33,8 +33,6 @@ from config.settings import (
     TIMEZONE,
     STRATEGIES,
     PAPER_TRADING_ENABLED,
-    PAPER_FORCE_PAIRS,
-    PAPER_MAX_POSITIONS,
 )
 from core.data_fetcher import DataFetcher
 from core import market_structure as ms
@@ -52,7 +50,6 @@ _alerter: TelegramAlerter | None = None
 _scheduler: BlockingScheduler | None = None
 _cmd_handler: TelegramCommandHandler | None = None
 _paper_trader: PaperTrader | None = None
-_forced_intraday_strategy: dict | None = None  # intraday with relaxed thresholds for forced scan
 
 # ── Signal cooldown tracking ────────────────────────────────────────────────────
 # Prevents the same pair+direction from spamming every scan cycle.
@@ -240,74 +237,21 @@ def check_paper_positions() -> None:
         logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
 
 
-def _run_forced_scan_tier(strategy: dict, needed: int, tier_label: str) -> int:
-    """Scan PAPER_FORCE_PAIRS dengan strategy tier tertentu. Return jumlah posisi dibuka."""
-    opened = 0
-    for pair in PAPER_FORCE_PAIRS:
-        if opened >= needed:
-            break
-        if len(_paper_trader._state["open_positions"]) >= PAPER_MAX_POSITIONS:
-            logger.info("[PAPER FORCED] Max posisi tercapai, berhenti")
-            break
-        try:
-            perp = f"{pair.replace('/USDT', '')}/USDT:USDT"
-            mtf_data = _fetcher.fetch_for_strategy(perp, strategy)
-            if any(df is None for df in mtf_data.values()):
-                logger.warning(f"[PAPER FORCED] [{tier_label}] {pair}: data incomplete — skip")
-                continue
-            setups = entry_engine.analyze_pair(pair, mtf_data, strategy)
-            for setup in setups:
-                position = _paper_trader.open_position(setup, force=True)
-                if position:
-                    status = _paper_trader.get_status()
-                    position["balance_at_open"] = f"{status['balance']:.2f}"
-                    _alerter.send_paper_entry(position)
-                    opened += 1
-                    logger.info(f"[PAPER FORCED] [{tier_label}] Buka {pair} {setup['direction']}")
-                    break  # 1 posisi per pair
-        except Exception as e:
-            logger.error(f"[PAPER FORCED] [{tier_label}] Error {pair}: {e}", exc_info=True)
-    return opened
-
-
-def forced_paper_scan(slot_target: int) -> None:
+def eod_close_positions() -> None:
     """
-    Wajib scan intraday di 10 pair utama jika trade hari ini < slot_target.
-    Dipanggil 3x sehari (09:00, 13:00, 18:00 WIB) — wajib ada trade setiap hari.
-    Tier 1: conf=2, rr=1.2. Tier 2 fallback: conf=1, rr=1.0 — tidak ada hari tanpa posisi.
+    End-of-day close: tutup semua posisi open di 22:00 WIB.
+    Memastikan tidak ada posisi yang melewati hari trading berikutnya.
     """
-    if not PAPER_TRADING_ENABLED or _paper_trader is None or _forced_intraday_strategy is None:
+    if not PAPER_TRADING_ENABLED or _paper_trader is None:
         return
-
-    today_count = _paper_trader.get_today_count()
-    needed = slot_target - today_count
-    if needed <= 0:
-        logger.info(f"[PAPER FORCED] Slot {slot_target}: sudah {today_count} trade hari ini ✓")
-        return
-
-    logger.info(f"[PAPER FORCED] Slot {slot_target}: butuh {needed} trade lagi (ada {today_count})")
-    _alerter.send_forced_scan_start(slot_target, today_count, needed)
-
-    opened = 0
-
-    # ── Tier 1: threshold normal forced (htf=4h, conf=2, rr=1.2) ─────────────
-    opened += _run_forced_scan_tier(_forced_intraday_strategy, needed, "TIER-1")
-
-    # ── Tier 2 fallback: jika tier 1 kurang — conf=1, rr=1.0 ─────────────────
-    still_needed = needed - opened
-    if still_needed > 0:
-        logger.info(f"[PAPER FORCED] TIER-1 kurang ({opened}/{needed}) — coba TIER-2")
-        _tier2 = {
-            **_forced_intraday_strategy,
-            "min_confidence": 1,
-            "min_rr": 1.0,
-        }
-        opened += _run_forced_scan_tier(_tier2, still_needed, "TIER-2")
-
-    # ── Notif hasil ke Telegram ───────────────────────────────────────────────
-    status = _paper_trader.get_status()
-    _alerter.send_forced_scan_result(slot_target, opened, needed, status["balance"])
-    logger.info(f"[PAPER FORCED] Slot {slot_target} selesai — buka {opened} posisi baru")
+    try:
+        closed = _paper_trader.close_all_eod(_fetcher)
+        for pos, _exit_price in closed:
+            _alerter.send_paper_exit(pos, "EXIT_EOD")
+        if closed:
+            logger.info(f"[PAPER EOD] Ditutup {len(closed)} posisi di akhir hari")
+    except Exception as e:
+        logger.error(f"[PAPER EOD] Error: {e}", exc_info=True)
 
 
 def send_daily_summary() -> None:
@@ -451,18 +395,7 @@ def main() -> None:
             f"[PAPER] Paper trading ON — balance=${status['balance']:.2f}, "
             f"open={status['open_positions']}, total closed={status['total_closed']}"
         )
-        # Build forced intraday strategy (relaxed thresholds for mandatory daily trading)
-        _intraday_base = next(s for s in STRATEGIES if s["name"] == "intraday")
-        global _forced_intraday_strategy
-        _forced_intraday_strategy = {
-            **_intraday_base,
-            "pairs": PAPER_FORCE_PAIRS,
-            "htf_tfs": ["4h"],     # hanya 1 TF untuk arah — bypass TF conflict 1h/15m
-            "min_confidence": 2,   # lebih longgar dari normal (3)
-            "min_rr": 1.2,         # lebih longgar dari normal (1.5)
-            "ob_fresh_lookback": 60,
-        }
-        logger.info(f"[PAPER] Forced intraday strategy ready — htf=4h only, min_conf=2, min_rr=1.2")
+        logger.info(f"[PAPER] Posisi terbuka organik dari scan reguler — maks 3/hari, tutup EOD 22:00")
 
     # Send startup notification
     all_pairs = sorted(set(p for s in STRATEGIES for p in s["pairs"]))
@@ -549,25 +482,18 @@ def main() -> None:
             misfire_grace_time=3600,
             max_instances=1,
         )
-        # Forced intraday scan: 3 slot per hari (WAJIB 3 trade/hari di 10 pair utama)
-        for slot_hour, slot_target, slot_id in [
-            (9,  1, "paper_force_1"),   # 09:00 WIB → target ≥1 trade hari ini
-            (13, 2, "paper_force_2"),   # 13:00 WIB → target ≥2 trade hari ini
-            (18, 3, "paper_force_3"),   # 18:00 WIB → target ≥3 trade hari ini
-        ]:
-            _tgt = slot_target  # capture for lambda closure
-            _scheduler.add_job(
-                lambda t=_tgt: forced_paper_scan(t),
-                trigger="cron",
-                hour=slot_hour,
-                minute=0,
-                id=slot_id,
-                name=f"Forced Paper Scan Slot {slot_target}",
-                misfire_grace_time=1800,
-                max_instances=1,
-            )
-        logger.info("  💼 Paper trading: position check every 5m, recap every 1st of month")
-        logger.info("  🔫 Forced intraday: 09:00 (≥1), 13:00 (≥2), 18:00 (≥3) trade/hari")
+        # EOD close: tutup semua posisi terbuka jam 22:00 WIB (tidak ada posisi lintas hari)
+        _scheduler.add_job(
+            eod_close_positions,
+            trigger="cron",
+            hour=22,
+            minute=0,
+            id="paper_eod_close",
+            name="Paper EOD Close",
+            misfire_grace_time=1800,
+            max_instances=1,
+        )
+        logger.info("  💼 Paper trading: max 3/hari organik, EOD close 22:00 WIB")
 
     logger.info(f"Watching: {', '.join(TRADING_PAIRS)}")
     logger.info("Bot is running. Press Ctrl+C to stop.")
