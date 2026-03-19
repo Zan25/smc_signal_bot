@@ -89,6 +89,10 @@ class PaperTrader:
             current_price = float(setup["current_price"])   # actual market price at signal time
             entry_low = float(setup["entry_low"])
             entry_high = float(setup["entry_high"])
+            # Use full OB zone for zone check (signal fires when price in full zone)
+            # entry_low/entry_high are CE (narrowed half-zone) — too restrictive for entry
+            zone_low = float(setup.get("ob_zone_low", entry_low))
+            zone_high = float(setup.get("ob_zone_high", entry_high))
             sl = float(setup["sl"])
             tp1 = float(setup["tp1"])
             tp2 = float(setup["tp2"])
@@ -118,11 +122,12 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
-            # Guard: harga harus di dalam zona OB/FVG — signal stale jika sudah keluar zona
-            if current_price < entry_low or current_price > entry_high:
+            # Guard: harga harus di dalam zona OB/FVG penuh — signal stale jika sudah keluar zona
+            # Gunakan full OB zone (zone_low-zone_high), bukan CE zone (midpoint-to-edge)
+            if current_price < zone_low or current_price > zone_high:
                 logger.info(
                     f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
-                    f"outside zone [{entry_low:.4f}-{entry_high:.4f}] — signal stale"
+                    f"outside full zone [{zone_low:.4f}-{zone_high:.4f}] — signal stale"
                 )
                 return None
 

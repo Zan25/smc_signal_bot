@@ -445,12 +445,25 @@ def analyze_pair(
     timeframe_entry_label = f"{ob_tf.upper()} OB → {entry_tf} konfirmasi"
 
     now_wib = datetime.now(tz=_WIB)
+    # Full OB/FVG zone (for paper trade zone check — entry valid anywhere in full zone)
+    if ob_match:
+        _full_zone_low = ob_match["zone_low"]
+        _full_zone_high = ob_match["zone_high"]
+    elif fvg_match:
+        _full_zone_low = fvg_match["zone_low"]
+        _full_zone_high = fvg_match["zone_high"]
+    else:
+        _full_zone_low = entry_low
+        _full_zone_high = entry_high
+
     setup = {
         "symbol": symbol,
         "direction": "LONG" if is_long else "SHORT",
         "entry_low": round(entry_low, 6),
         "entry_high": round(entry_high, 6),
         "entry_mid": round(entry, 6),
+        "ob_zone_low": round(_full_zone_low, 6),   # full OB zone for paper trade zone check
+        "ob_zone_high": round(_full_zone_high, 6),
         "sl": round(sl, 6),
         "tp1": round(tp1, 6),
         "tp2": round(tp2, 6),

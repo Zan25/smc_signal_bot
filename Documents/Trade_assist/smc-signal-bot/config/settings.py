@@ -119,9 +119,9 @@ STRATEGIES: list[dict] = [
         "entry_tf": "15m",                 # user watches this TF for confirmation
         "pairs": SWING_PAIRS,
         "scan_interval_minutes": 15,
-        "min_confidence": 4,
+        "min_confidence": 3,
         "min_rr": 2.0,
-        "max_signals_per_scan": 2,
+        "max_signals_per_scan": 3,
         "ob_fresh_lookback": 80,
         "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room
         "min_sl_pct": 0.008,              # SL minimum 0.8% dari entry
@@ -135,10 +135,10 @@ STRATEGIES: list[dict] = [
         "entry_tf": "5m",
         "pairs": INTRADAY_PAIRS,
         "scan_interval_minutes": 5,
-        "min_confidence": 5,
+        "min_confidence": 3,
         "min_rr": 1.5,
         "ob_fresh_lookback": 60,
-        "max_signals_per_scan": 2,
+        "max_signals_per_scan": 3,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
         "min_sl_pct": 0.003,              # SL minimum 0.3% dari entry (10x leverage)
     },
