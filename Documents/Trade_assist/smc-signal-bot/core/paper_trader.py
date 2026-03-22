@@ -122,6 +122,16 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
+            # Guard: skip jika setup adalah "approaching" — price belum masuk zone
+            # Signal approaching dikirim ke Telegram sebagai advance warning (limit order prep)
+            # Paper trade hanya dibuka ketika price benar-benar di dalam zone (approaching=False)
+            if setup.get("approaching", False):
+                logger.info(
+                    f"[PAPER] Skip {symbol} {direction}: approaching zone only "
+                    f"(price {current_price:.4f} not yet in [{zone_low:.4f}-{zone_high:.4f}])"
+                )
+                return None
+
             # Guard: harga harus di dalam zona OB/FVG penuh — signal stale jika sudah keluar zona
             # Gunakan full OB zone (zone_low-zone_high), bukan CE zone (midpoint-to-edge)
             if current_price < zone_low or current_price > zone_high:

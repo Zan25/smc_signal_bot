@@ -98,21 +98,35 @@ def _save_cooldown() -> None:
         logger.warning(f"[COOLDOWN] Could not save cooldown state: {e}")
 
 
+def _cooldown_key(setup: dict) -> str:
+    """
+    Build cooldown key. Approaching signals use a separate namespace (_approach suffix)
+    so they don't block the real "at zone" signal when price eventually enters the zone.
+    """
+    base = f"{setup['symbol']}_{setup['direction']}"
+    return f"{base}_approach" if setup.get("approaching", False) else base
+
+
 def _is_on_cooldown(setup: dict) -> bool:
     """Return True if this pair+direction was sent recently (any strategy counts)."""
-    key = f"{setup['symbol']}_{setup['direction']}"
+    key = _cooldown_key(setup)
     with _signal_cooldown_lock:
         entry = _signal_cooldown.get(key)
         if not entry:
             return False
         last_sent, strat = entry
-        hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
+        # Approaching signals: shorter cooldown (1h) so they don't spam but still repeat
+        # At-zone signals: full cooldown per strategy
+        if setup.get("approaching", False):
+            hours = 1.0
+        else:
+            hours = _COOLDOWN_HOURS.get(setup.get("strategy_name", ""), 4)
         return datetime.now() - last_sent < timedelta(hours=hours)
 
 
 def _mark_cooldown(setup: dict) -> None:
     """Record that this signal was just sent, then persist to file."""
-    key = f"{setup['symbol']}_{setup['direction']}"
+    key = _cooldown_key(setup)
     with _signal_cooldown_lock:
         _signal_cooldown[key] = (datetime.now(), setup.get("strategy_name", ""))
     _save_cooldown()

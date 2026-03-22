@@ -122,7 +122,8 @@ STRATEGIES: list[dict] = [
         "min_confidence": 3,
         "min_rr": 2.0,
         "max_signals_per_scan": 3,
-        "ob_fresh_lookback": 80,
+        "ob_fresh_lookback": 120,          # 80→120: 4H×120 = ~20 hari, support OB lebih lama
+        "ob_approach_pct": 0.03,          # alert jika price dalam 3% dari zone (anticipatory)
         "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room
         "min_sl_pct": 0.008,              # SL minimum 0.8% dari entry
     },
@@ -137,7 +138,8 @@ STRATEGIES: list[dict] = [
         "scan_interval_minutes": 5,
         "min_confidence": 3,
         "min_rr": 1.5,
-        "ob_fresh_lookback": 60,
+        "ob_fresh_lookback": 100,          # 60→100: 1H×100 = ~4 hari, lebih banyak OB valid
+        "ob_approach_pct": 0.02,          # alert jika price dalam 2% dari zone
         "max_signals_per_scan": 3,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
         "min_sl_pct": 0.003,              # SL minimum 0.3% dari entry (10x leverage)

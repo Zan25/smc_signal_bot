@@ -234,14 +234,15 @@ def analyze_pair(
             return []
 
     # ── 4b. Zone sanity check (non-ranging path only) ─────────────────────────
-    # If price is way outside the detected swing range (pos > 110% or pos < -10%),
-    # the swing levels are likely stale — skip to avoid chasing
+    # If price is way outside the detected swing range, swing levels may be stale.
+    # Threshold relaxed to 150%/-50% so breakout coins with valid pullback OBs
+    # are not skipped (110%/-10% was too aggressive, blocking BTC/ETH in trends).
     if not is_ranging_market:
         pos_sanity = pd_result["position_pct"]
-        if htf_direction == "bullish" and pos_sanity > 110.0:
+        if htf_direction == "bullish" and pos_sanity > 150.0:
             logger.info(f"{symbol}: Zone {pos_sanity:.0f}% too far above range for LONG — skipping")
             return []
-        if htf_direction == "bearish" and pos_sanity < -10.0:
+        if htf_direction == "bearish" and pos_sanity < -50.0:
             logger.info(f"{symbol}: Zone {pos_sanity:.0f}% too far below range for SHORT — skipping")
             return []
 
@@ -260,33 +261,69 @@ def analyze_pair(
     ob_list = obs_ob["bullish"] if is_long else obs_ob["bearish"]
     fvg_list = fvgs_ob["bullish"] if is_long else fvgs_ob["bearish"]
 
-    # Find matching OB: inside zone OR approaching within 1% — freshness filter
+    # Find matching OB: inside zone OR approaching within ob_approach_pct of price
+    # ob_approach_pct allows anticipatory signals (price near zone, not just inside it)
+    # This lets us catch setups BEFORE price touches the zone — limit order style
+    ob_approach_pct = strategy.get("ob_approach_pct", 0.02)
     ob_match = None
+    ob_approaching = False   # True if approaching but not yet inside zone
     for ob in ob_list:
         ob_age = len(df_ob) - 1 - ob.get("index", 0)
         if ob_age > ob_fresh_lookback:
             continue
-        if order_blocks.is_price_in_ob(current_price, ob, tolerance=0.01):
+        # Check: price inside zone (with tight 0.5% tolerance)
+        if order_blocks.is_price_in_ob(current_price, ob, tolerance=0.005):
             ob_match = ob
+            ob_approaching = False
             break
+        # Check: price approaching zone from correct direction
+        # LONG: price above zone (approaching from above) within ob_approach_pct
+        # SHORT: price below zone (approaching from below) within ob_approach_pct
+        if is_long:
+            approach = (current_price - ob["zone_high"]) / current_price
+            if 0 <= approach <= ob_approach_pct:
+                ob_match = ob
+                ob_approaching = True
+                break
+        else:
+            approach = (ob["zone_low"] - current_price) / current_price
+            if 0 <= approach <= ob_approach_pct:
+                ob_match = ob
+                ob_approaching = True
+                break
 
-    # Find matching FVG: price inside or within 2% of zone width
+    # Find matching FVG: price inside or within ob_approach_pct away
     fvg_match = None
     for fv in fvg_list:
         fvg_tol = (fv["zone_high"] - fv["zone_low"]) * 0.02
-        if fv["zone_low"] - fvg_tol <= current_price <= fv["zone_high"] + fvg_tol:
+        zone_low_with_tol = fv["zone_low"] - fvg_tol
+        zone_high_with_tol = fv["zone_high"] + fvg_tol
+        if zone_low_with_tol <= current_price <= zone_high_with_tol:
             fvg_match = fv
             break
+        # Approaching FVG from correct direction
+        if is_long:
+            approach = (current_price - fv["zone_high"]) / current_price
+            if 0 <= approach <= ob_approach_pct:
+                fvg_match = fv
+                break
+        else:
+            approach = (fv["zone_low"] - current_price) / current_price
+            if 0 <= approach <= ob_approach_pct:
+                fvg_match = fv
+                break
 
     # ── 8. Confluence scoring (0–6) ───────────────────────────────────────────
     score = 0
     score += 1  # TF alignment confirmed
 
-    # Zone bonus: long needs price in bottom 45%, short in top 45%
+    # Zone bonus: long in discount (bottom 50%), short in premium (top 50%)
+    # Use 50%/50% midline — broader than previous 45%/55% which was too strict
+    # for coins in active trends that stay in upper/lower half of range
     pos = pd_result["position_pct"]
-    if is_long and pos < 45.0:
+    if is_long and pos < 50.0:
         score += 1
-    elif not is_long and pos > 55.0:
+    elif not is_long and pos > 50.0:
         score += 1
 
     if ob_match is not None:
@@ -464,6 +501,7 @@ def analyze_pair(
         "entry_mid": round(entry, 6),
         "ob_zone_low": round(_full_zone_low, 6),   # full OB zone for paper trade zone check
         "ob_zone_high": round(_full_zone_high, 6),
+        "approaching": ob_approaching,              # True = price approaching, not yet in zone
         "sl": round(sl, 6),
         "tp1": round(tp1, 6),
         "tp2": round(tp2, 6),

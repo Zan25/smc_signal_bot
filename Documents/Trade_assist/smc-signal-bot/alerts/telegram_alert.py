@@ -365,7 +365,7 @@ class TelegramAlerter:
         is_long = setup["direction"] == "LONG"
         dir_emoji   = "🟢" if is_long else "🔴"
         order_type  = "LIMIT BUY" if is_long else "LIMIT SELL"
-        dir_label   = "LONG" if is_long else "SHORT"
+        is_approaching = setup.get("approaching", False)
 
         confidence = setup["confidence"]
         stars = "⭐" * min(confidence, 8) + "☆" * max(0, 8 - confidence)
@@ -388,6 +388,7 @@ class TelegramAlerter:
         entry_low  = setup["entry_low"]
         entry_high = setup["entry_high"]
         entry_mid  = setup["entry_mid"]
+        current_price = setup.get("current_price", entry_mid)
         sl   = setup["sl"]
         tp1  = setup["tp1"]
         tp2  = setup["tp2"]
@@ -395,15 +396,27 @@ class TelegramAlerter:
         tp1_pct = abs(tp1 - entry_mid) / entry_mid * 100
         tp2_pct = abs(tp2 - entry_mid) / entry_mid * 100
 
+        # Distance from current price to zone edge
+        if is_approaching:
+            if is_long:
+                dist_pct = (current_price - entry_high) / current_price * 100
+            else:
+                dist_pct = (entry_low - current_price) / current_price * 100
+            status_line = f"⚠️ *APPROACHING ZONE* — masih {dist_pct:.1f}% dari zone\n📋 Siapkan LIMIT ORDER di zone:\n"
+            header_tag = "🎯"
+        else:
+            status_line = f"📌 *PRICE AT ZONE — Eksekusi {order_type}:*\n"
+            header_tag = "📡"
+
         msg = (
-            f"📡 *{order_type} — {setup['symbol']}* {dir_emoji}\n"
+            f"{header_tag} *{order_type} — {setup['symbol']}* {dir_emoji}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"{strategy_emoji} {strategy_label} | {stars} {confidence}/8\n"
             f"\n"
-            f"📌 *PASANG {order_type}:*\n"
+            f"{status_line}"
             f"Zone: `{fmt(entry_low)} – {fmt(entry_high)}`\n"
             f"Mid: `{fmt(entry_mid)}`\n"
-            f"Pasar: `{fmt(setup.get('current_price', entry_mid))}`\n"
+            f"Pasar: `{fmt(current_price)}`\n"
             f"\n"
             f"🛑 *Stop Loss:* `{fmt(sl)}` (-{sl_pct:.1f}%)\n"
             f"🎯 *TP1:* `{fmt(tp1)}` (+{tp1_pct:.1f}%) → *JUAL 50%*\n"

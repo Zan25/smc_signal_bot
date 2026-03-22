@@ -110,9 +110,11 @@ def detect(
         ):
             zone_low = min(candle_open, candle_close)
             zone_high = max(candle_open, candle_close)
-            # Retroactive mitigation: check if any candle AFTER the OB closed inside zone
+            # Mitigation: bullish OB is invalid only when price CLOSES BELOW zone_low
+            # (structure violated — zone can no longer act as support).
+            # Closing INSIDE the zone is a valid retest/entry, NOT mitigation.
             mitigated = any(
-                zone_low <= float(df["close"].iloc[j]) <= zone_high
+                float(df["close"].iloc[j]) < zone_low
                 for j in range(i + 1, len(df))
             )
             if not mitigated:
@@ -132,9 +134,10 @@ def detect(
         ):
             zone_low = min(candle_open, candle_close)
             zone_high = max(candle_open, candle_close)
-            # Retroactive mitigation: check if any candle AFTER the OB closed inside zone
+            # Mitigation: bearish OB is invalid only when price CLOSES ABOVE zone_high
+            # (structure violated — zone can no longer act as resistance).
             mitigated = any(
-                zone_low <= float(df["close"].iloc[j]) <= zone_high
+                float(df["close"].iloc[j]) > zone_high
                 for j in range(i + 1, len(df))
             )
             if not mitigated:
