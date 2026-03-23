@@ -96,9 +96,9 @@ def determine_trend(swing_highs: pd.Series, swing_lows: pd.Series) -> str:
         elif lows[i] < lows[i - 1]:
             bear_score += weight
 
-    if bull_score > bear_score + 1.0:
+    if bull_score > bear_score + 0.5:
         return "bullish"
-    elif bear_score > bull_score + 1.0:
+    elif bear_score > bull_score + 0.5:
         return "bearish"
     return "ranging"
 
@@ -228,6 +228,7 @@ def analyze(df: pd.DataFrame, n: int = SWING_LOOKBACK) -> dict:
             "last_swing_low": None,
             "last_bos": None,
             "last_choch": None,
+            "flag_pattern": None,
         }
 
     swing_highs, swing_lows = detect_swings(df, n=n)
@@ -249,4 +250,52 @@ def analyze(df: pd.DataFrame, n: int = SWING_LOOKBACK) -> dict:
         "all_swing_lows": sl_vals,
         "last_bos": last_bos,
         "last_choch": last_choch,
+        "flag_pattern": detect_flag_pattern(df, trend),
     }
+
+
+def detect_flag_pattern(df: pd.DataFrame, trend: str) -> dict | None:
+    """
+    Detect bear/bull flag: impulsive move followed by tight consolidation.
+
+    Bear flag = bearish trend + recent impulse down (candles -20 to -10)
+                + current flag body (last 10 candles) is ≥35% tighter than impulse
+    Bull flag = inverse pattern.
+
+    This catches setups like the BTC bear flag visible on the daily chart:
+    flagpole (sharp sell-off) + flag (tight consolidation/bounce) = bearish continuation.
+
+    Returns:
+        {'type': 'bear_flag'|'bull_flag', 'compression': float} or None
+    """
+    if len(df) < 30 or trend == "ranging":
+        return None
+
+    # Impulse window: candles 20–10 ago (the 'flagpole')
+    impulse = df.iloc[-20:-10]
+    # Flag window: last 10 candles (the 'flag body')
+    flag = df.iloc[-10:]
+
+    impulse_range = float(impulse["high"].max() - impulse["low"].min())
+    flag_range = float(flag["high"].max() - flag["low"].min())
+
+    if impulse_range == 0:
+        return None
+
+    # Compression ratio: flag range as % of impulse range
+    # A true flag has ≥35% tighter range than the impulse (compression < 0.65)
+    compression = flag_range / impulse_range
+    if compression >= 0.65:
+        return None
+
+    # Impulse direction must match trend
+    impulse_start = float(impulse["close"].iloc[0])
+    impulse_end = float(impulse["close"].iloc[-1])
+
+    if trend == "bearish" and impulse_start > impulse_end:
+        return {"type": "bear_flag", "compression": round(compression, 2)}
+
+    if trend == "bullish" and impulse_start < impulse_end:
+        return {"type": "bull_flag", "compression": round(compression, 2)}
+
+    return None

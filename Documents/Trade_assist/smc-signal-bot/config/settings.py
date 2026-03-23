@@ -102,7 +102,7 @@ SWING_LOOKBACK: int = 3          # fractal swing detection: n candles left+right
 OB_MAX_TRACKED: int = 8          # max order blocks tracked per direction
 EQH_EQL_TOLERANCE: float = 0.003  # 0.3% tolerance for equal highs/lows
 OB_BUFFER_PCT: float = 0.005     # 0.5% buffer above/below OB for SL placement
-OB_MOVE_MULTIPLIER: float = 2.0  # impulsive move threshold: n * ATR
+OB_MOVE_MULTIPLIER: float = 1.5  # impulsive move threshold: n * ATR (1.5→more bearish OBs detected)
 OB_PRICE_FLOOR_PCT: float = 0.005  # minimum 0.5% of price for ATR floor
 LIQUIDITY_PROXIMITY_PCT: float = 0.005  # 0.5% proximity for liquidity check
 

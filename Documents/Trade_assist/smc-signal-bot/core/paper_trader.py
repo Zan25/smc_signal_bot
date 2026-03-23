@@ -37,11 +37,12 @@ EXIT_SL_BE = "SL_HIT_BE"  # SL hit after breakeven move
 EXIT_EXPIRED = "EXPIRED"  # Position auto-closed after max duration
 
 # Max open duration per strategy before auto-cancel
-# Kept short so positions close daily and simulation stays realistic
+# Swing uses 4H OBs that need 1-2 days to play out — keep positions alive longer
+# Intraday uses 1H OBs — 12h is enough for realistic simulation
 _MAX_DURATION_HOURS: dict[str, int] = {
     "scalp": 4,
-    "intraday": 6,   # 8h → 6h: posisi harus close same-day
-    "swing": 8,      # 24h → 8h: posisi harus close same-day
+    "intraday": 12,  # 6h → 12h: intraday OBs need up to half a day
+    "swing": 36,     # 8h → 36h: swing positions can survive overnight (4H OBs need time)
 }
 
 
@@ -475,8 +476,9 @@ class PaperTrader:
 
     def close_all_eod(self, fetcher) -> list[tuple[dict, float]]:
         """
-        Tutup semua posisi terbuka di akhir hari (22:00 WIB).
-        Dipanggil oleh scheduler agar tidak ada posisi yang melewati hari berikutnya.
+        Tutup posisi intraday/scalp di akhir hari (22:00 WIB).
+        Swing positions TIDAK ditutup — dibiarkan hidup hingga max_duration 36h
+        karena 4H OB butuh waktu bermain, termasuk overnight.
 
         Returns:
             List of (closed_position_dict, exit_price) for each position closed.
@@ -485,6 +487,10 @@ class PaperTrader:
         with self._lock:
             still_open = []
             for pos in self._state["open_positions"]:
+                # Swing positions survive overnight — close naturally via max_duration (36h)
+                if pos.get("strategy") == "swing":
+                    still_open.append(pos)
+                    continue
                 symbol = pos["symbol"]
                 perp_sym = f"{symbol.replace('/USDT', '')}/USDT:USDT"
                 try:

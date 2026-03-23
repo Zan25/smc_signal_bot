@@ -360,13 +360,21 @@ def analyze_pair(
         if choch_entry and choch_entry.get("direction") == htf_direction:
             score += 1
             choch_entry_hit = True
+
+    # Flag pattern (bear/bull flag) = impulse + tight consolidation on ob_tf
+    # Detects patterns like the BTC bear flag: sharp sell-off + tight bounce = continuation
+    flag_info = market_structure.detect_flag_pattern(df_ob, htf_direction)
+    if flag_info:
+        score += 1
+
     logger.info(
         f"[{strategy['name'].upper()}] {symbol} {htf_direction.upper()}: "
-        f"score={score}/8, ob={'yes' if ob_match else 'no'}, "
+        f"score={score}/9, ob={'yes' if ob_match else 'no'}, "
         f"fvg={'yes' if fvg_match else 'no'}, zone={pd_result['zone']}({pos:.0f}%), "
         f"liq={liq_near}, "
         f"bos={'yes' if bos_ob and bos_ob.get('direction')==htf_direction else 'no'}, "
-        f"choch_entry={'yes' if choch_entry_hit else 'no'}"
+        f"choch_entry={'yes' if choch_entry_hit else 'no'}, "
+        f"flag={'yes ('+flag_info['type']+')' if flag_info else 'no'}"
     )
 
     if score < min_confidence:
@@ -472,6 +480,9 @@ def analyze_pair(
         htf_direction, htf_direction, htf_tfs, ob_tf,
         pd_result, ob_match, fvg_overlap, liq_near, liq_target
     )
+    if flag_info:
+        flag_label = "Bear Flag" if flag_info["type"] == "bear_flag" else "Bull Flag"
+        reasons.append(f"Pola {flag_label} terdeteksi (konsolidasi {flag_info['compression']*100:.0f}% dari impulse)")
 
     htf_trend_str = " | ".join(
         f"{tf.upper()}: {trends[tf].capitalize()}" for tf in htf_tfs
@@ -517,11 +528,13 @@ def analyze_pair(
         "strategy_label": strategy["label"],
         "strategy_emoji": strategy["emoji"],
         "entry_tf": entry_tf,
+        "flag_pattern": flag_info,                 # bear_flag/bull_flag if detected, else None
     }
 
     setups.append(setup)
     logger.info(
         f"[{strategy['name'].upper()}] Valid setup: {symbol} {htf_direction.upper()} "
         f"entry={entry:.4f} sl={sl:.4f} tp2={tp2:.4f} rr={rr_tp2:.2f}"
+        + (f" | FLAG:{flag_info['type']}" if flag_info else "")
     )
     return setups

@@ -95,7 +95,7 @@ class TelegramAlerter:
         is_long = position["direction"] == "LONG"
         order_type = "LIMIT BUY" if is_long else "LIMIT SELL"
         dir_emoji = "🟢" if is_long else "🔴"
-        strategy_map = {"swing": "📈 Swing (24j)", "intraday": "⏱️ Intraday (8j)", "scalp": "⚡ Scalp (4j)"}
+        strategy_map = {"swing": "📈 Swing (36j)", "intraday": "⏱️ Intraday (12j)", "scalp": "⚡ Scalp (4j)"}
         strategy_label = strategy_map.get(position.get("strategy", ""), position.get("strategy", ""))
 
         def fmt(p: float) -> str:
@@ -203,7 +203,7 @@ class TelegramAlerter:
             note   = "🛑 CUT LOSS dieksekusi"
 
         elif reason == "EXPIRED":
-            max_h  = {"scalp": 4, "intraday": 6, "swing": 8}.get(position.get("strategy", "intraday"), 8)
+            max_h  = {"scalp": 4, "intraday": 12, "swing": 36}.get(position.get("strategy", "intraday"), 12)
             header = f"⏳ *AUTO CLOSE — Waktu Habis ({max_h}j)*"
             action = f"📤 *{close_side} 100%* @ `{fmt(exit_price)}` *(market price)*"
             note   = "⏰ Posisi ditutup otomatis — tidak ada TP/SL yang tersentuh"
@@ -384,6 +384,13 @@ class TelegramAlerter:
         strategy_emoji = setup.get("strategy_emoji", "📊")
         strategy_label = setup.get("strategy_label", "")
         reasons_text   = "\n".join(f"• {r}" for r in setup["reasons"])
+        # Flag pattern badge (if detected)
+        flag_info = setup.get("flag_pattern")
+        flag_badge = ""
+        if flag_info:
+            flag_emoji = "🐻" if flag_info["type"] == "bear_flag" else "🐂"
+            flag_name = "Bear Flag" if flag_info["type"] == "bear_flag" else "Bull Flag"
+            flag_badge = f"\n{flag_emoji} *{flag_name} Detected* — konsolidasi {flag_info['compression']*100:.0f}% dari impulse\n"
 
         entry_low  = setup["entry_low"]
         entry_high = setup["entry_high"]
@@ -411,7 +418,8 @@ class TelegramAlerter:
         msg = (
             f"{header_tag} *{order_type} — {setup['symbol']}* {dir_emoji}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{strategy_emoji} {strategy_label} | {stars} {confidence}/8\n"
+            f"{strategy_emoji} {strategy_label} | {stars} {confidence}/9\n"
+            f"{flag_badge}"
             f"\n"
             f"{status_line}"
             f"Zone: `{fmt(entry_low)} – {fmt(entry_high)}`\n"
