@@ -216,13 +216,16 @@ def analyze_pair(
     else:
         htf_direction = top_trend
 
-        # Allow up to 1 conflicting lower TF (1 conflict = acceptable divergence)
+        # Allow up to max_htf_conflicts conflicting lower TFs
+        # intraday=2 (bear flag: 4H bear + 1H bull + 15m bull is valid setup)
+        # swing=1 (higher TF structure must be cleaner)
+        max_htf_conflicts = strategy.get("max_htf_conflicts", 1)
         trend_desc = ", ".join(f"{tf}={t}" for tf, t in trends.items())
         conflicts = sum(
             1 for tf in htf_tfs[1:]
             if trends[tf] != "ranging" and trends[tf] != htf_direction
         )
-        if conflicts > 1:
+        if conflicts > max_htf_conflicts:
             logger.info(f"{symbol}: TF multi-conflict ({trend_desc}) — skipping")
             return []
 
