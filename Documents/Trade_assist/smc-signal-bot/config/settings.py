@@ -167,9 +167,10 @@ STRATEGIES: list[dict] = [
 PAPER_TRADING_ENABLED: bool = _get_env("PAPER_TRADING_ENABLED", "true").lower() == "true"
 PAPER_INITIAL_BALANCE: float = float(_get_env("PAPER_INITIAL_BALANCE", 100.0))
 PAPER_LEVERAGE: int = 10
-PAPER_MAX_POSITIONS: int = 3               # max 3 posisi concurrent (= kuota harian)
-PAPER_MAX_DAILY_TRADES: int = 3           # hard cap 3 trade per hari — tidak ada trade ke-4
-PAPER_MARGIN_PER_TRADE_PCT: float = 0.33  # 33% balance per posisi → $33 × 10x = $330 exposure
+PAPER_MAX_POSITIONS: int = 2               # max 2 posisi concurrent
+PAPER_MAX_DAILY_TRADES: int = 4           # hard cap 4 trade per hari
+PAPER_MAX_PENDING: int = 2            # max pending limit orders at a time
+PAPER_MARGIN_PER_TRADE_PCT: float = 0.45  # 45% balance per posisi → $45 × 10x = $450 exposure
 PAPER_STATE_FILE: str = str(_BASE_DIR / "paper_state.json")
 PAPER_FORCE_PAIRS: list[str] = [          # 10 pair utama untuk forced intraday scan
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",

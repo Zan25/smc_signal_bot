@@ -19,6 +19,7 @@ from config.settings import (
     PAPER_LEVERAGE,
     PAPER_MAX_POSITIONS,
     PAPER_MAX_DAILY_TRADES,
+    PAPER_MAX_PENDING,
     PAPER_MARGIN_PER_TRADE_PCT,
     PAPER_STATE_FILE,
     TIMEZONE,
@@ -43,6 +44,14 @@ _MAX_DURATION_HOURS: dict[str, int] = {
     "scalp": 4,
     "intraday": 12,  # 6h → 12h: intraday OBs need up to half a day
     "swing": 36,     # 8h → 36h: swing positions can survive overnight (4H OBs need time)
+}
+
+# Pending limit order expiry per strategy
+# Approaching signals add pending orders that expire if price never touches zone
+_PENDING_EXPIRY_HOURS: dict[str, int] = {
+    "scalp": 1,
+    "intraday": 2,
+    "swing": 6,
 }
 
 
@@ -123,18 +132,13 @@ class PaperTrader:
                     logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
                     return None
 
-            # Guard: skip jika setup adalah "approaching" — price belum masuk zone
-            # Signal approaching dikirim ke Telegram sebagai advance warning (limit order prep)
-            # Paper trade hanya dibuka ketika price benar-benar di dalam zone (approaching=False)
+            # Approaching signal: add as pending limit order at zone boundary
+            # This simulates placing a limit order BEFORE price enters the zone.
+            # The order fills when price actually touches the zone boundary.
             if setup.get("approaching", False):
-                logger.info(
-                    f"[PAPER] Skip {symbol} {direction}: approaching zone only "
-                    f"(price {current_price:.4f} not yet in [{zone_low:.4f}-{zone_high:.4f}])"
-                )
-                return None
+                return self._add_pending_order(setup)
 
             # Guard: harga harus di dalam zona OB/FVG penuh — signal stale jika sudah keluar zona
-            # Gunakan full OB zone (zone_low-zone_high), bukan CE zone (midpoint-to-edge)
             if current_price < zone_low or current_price > zone_high:
                 logger.info(
                     f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
@@ -143,7 +147,6 @@ class PaperTrader:
                 return None
 
             # Fill at current market price (market fill when price enters zone)
-            # entry_mid is a historical OB midpoint — using current_price is more realistic
             entry = current_price
 
             # Guard: TP1/TP2 must be on the correct side of entry
@@ -167,7 +170,7 @@ class PaperTrader:
             # Fixed margin = 33% of balance per position → meaningful size
             # With 10x leverage: $33 margin → $330 exposure
             margin_used = balance * PAPER_MARGIN_PER_TRADE_PCT
-            margin_used = min(margin_used, balance * 0.40)        # hard cap 40% balance
+            margin_used = min(margin_used, balance * 0.50)        # hard cap 50% balance
             position_size_usd = margin_used * PAPER_LEVERAGE      # total exposure
             risk_amount = position_size_usd * sl_dist_pct         # actual $ risk
             qty = position_size_usd / entry
@@ -210,14 +213,21 @@ class PaperTrader:
     def check_positions(self, fetcher) -> list[tuple[dict, str]]:
         """
         Check all open positions against current market prices.
+        Also checks pending limit orders for fills.
 
         Args:
             fetcher: DataFetcher instance (uses get_current_price)
 
         Returns:
             List of (closed_position_dict, exit_reason) tuples for each closed position.
+            Filled pending orders are returned with reason "PENDING_FILLED".
         """
         exits = []
+
+        # Check pending limit orders first — convert filled ones to active positions
+        filled_from_pending = self.check_pending_orders(fetcher)
+        for pos in filled_from_pending:
+            exits.append((dict(pos), "PENDING_FILLED"))
 
         with self._lock:
             still_open = []
@@ -485,6 +495,12 @@ class PaperTrader:
         """
         closed_list = []
         with self._lock:
+            # Cancel all pending orders at EOD (no carryover to next day)
+            cancelled = len(self._state.get("pending_orders", []))
+            if cancelled:
+                logger.info(f"[PAPER EOD] Cancelled {cancelled} pending limit orders")
+            self._state["pending_orders"] = []
+
             still_open = []
             for pos in self._state["open_positions"]:
                 # Swing positions survive overnight — close naturally via max_duration (36h)
@@ -567,6 +583,242 @@ class PaperTrader:
                 "total_closed": len(self._state["closed_positions"]),
             }
 
+    # ── Pending limit order management ────────────────────────────────────────
+
+    def _add_pending_order(self, setup: dict) -> dict | None:
+        """
+        Add a pending limit order for an approaching signal.
+
+        The fill price is the zone boundary — where price enters the zone first:
+        - LONG approaching (price falling toward bullish OB): fill at zone_high
+        - SHORT approaching (price rising toward bearish OB): fill at zone_low
+
+        Returns the pending order dict (with status='pending'), or None if not added.
+        """
+        symbol = setup["symbol"]
+        direction = setup["direction"]
+        is_long = direction == "LONG"
+        zone_low = float(setup.get("ob_zone_low", 0))
+        zone_high = float(setup.get("ob_zone_high", 0))
+
+        if not zone_low or not zone_high:
+            logger.info(f"[PAPER] Skip pending {symbol}: no ob_zone in setup")
+            return None
+
+        pending_orders = self._state.setdefault("pending_orders", [])
+
+        # Guard: max pending orders
+        if len(pending_orders) >= PAPER_MAX_PENDING:
+            logger.info(f"[PAPER] Skip pending {symbol} {direction}: max {PAPER_MAX_PENDING} pending orders")
+            return None
+
+        # Guard: no duplicate symbol+direction in pending
+        for p in pending_orders:
+            if p["symbol"] == symbol and p["direction"] == direction:
+                logger.info(f"[PAPER] Skip pending {symbol} {direction}: already in queue")
+                return None
+
+        # Guard: no duplicate in open positions
+        for pos in self._state["open_positions"]:
+            if pos["symbol"] == symbol and pos["direction"] == direction:
+                return None
+
+        # Fill price = zone boundary where price enters first
+        fill_price = zone_high if is_long else zone_low
+
+        strategy = setup.get("strategy_name", "intraday")
+        expiry_hours = _PENDING_EXPIRY_HOURS.get(strategy, 2)
+        now = datetime.now(tz=_WIB)
+
+        order = {
+            "id": str(uuid.uuid4())[:8],
+            "symbol": symbol,
+            "direction": direction,
+            "fill_price": round(fill_price, 6),
+            "ob_zone_low": round(zone_low, 6),
+            "ob_zone_high": round(zone_high, 6),
+            "sl": round(float(setup["sl"]), 6),
+            "tp1": round(float(setup["tp1"]), 6),
+            "tp2": round(float(setup["tp2"]), 6),
+            "strategy": strategy,
+            "score": setup.get("confidence", 0),
+            "rr": round(float(setup.get("rr_tp2", 0.0)), 2),
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(hours=expiry_hours)).isoformat(),
+            "status": "pending",
+        }
+
+        pending_orders.append(order)
+        self._save_state()
+
+        logger.info(
+            f"[PAPER] Pending LIMIT added: {symbol} {direction} @ {fill_price:.4f} "
+            f"(expires {expiry_hours}h)"
+        )
+        return order
+
+    def check_pending_orders(self, fetcher) -> list[dict]:
+        """
+        Check if any pending limit orders have been filled by current market price.
+
+        Returns list of newly opened positions (from filled pending orders).
+        Called from check_positions() BEFORE the open position loop.
+        """
+        filled_positions = []
+
+        with self._lock:
+            now = datetime.now(tz=_WIB)
+            still_pending = []
+
+            for order in self._state.get("pending_orders", []):
+                symbol = order["symbol"]
+                direction = order["direction"]
+                is_long = direction == "LONG"
+                fill_price = order["fill_price"]
+
+                # Check expiry
+                try:
+                    expires_dt = datetime.fromisoformat(order["expires_at"])
+                    if not expires_dt.tzinfo:
+                        expires_dt = _WIB.localize(expires_dt)
+                    if now >= expires_dt:
+                        logger.info(f"[PAPER] Pending {symbol} {direction} EXPIRED unfilled")
+                        continue  # drop expired order
+                except Exception:
+                    pass
+
+                # Fetch current price
+                perp_sym = f"{symbol.replace('/USDT', '')}/USDT:USDT"
+                try:
+                    current_price = fetcher.get_current_price(perp_sym)
+                except Exception as e:
+                    logger.warning(f"[PAPER] Pending {symbol}: price fetch error: {e}")
+                    still_pending.append(order)
+                    continue
+
+                if current_price is None:
+                    still_pending.append(order)
+                    continue
+
+                # Check fill condition
+                # LONG: price must DROP to fill_price (zone_high)
+                # SHORT: price must RISE to fill_price (zone_low)
+                filled = (
+                    (is_long and current_price <= fill_price) or
+                    (not is_long and current_price >= fill_price)
+                )
+
+                if not filled:
+                    still_pending.append(order)
+                    continue
+
+                # Check if we can still open (concurrent limit)
+                if len(self._state["open_positions"]) >= PAPER_MAX_POSITIONS:
+                    logger.info(
+                        f"[PAPER] Pending {symbol} {direction} filled but max positions reached — cancelling"
+                    )
+                    continue  # cancel this pending order
+
+                # Check daily trade limit
+                today_count = self._count_today_trades()
+                if today_count >= PAPER_MAX_DAILY_TRADES:
+                    logger.info(
+                        f"[PAPER] Pending {symbol} filled but daily limit reached — cancelling"
+                    )
+                    continue
+
+                # Check duplicate in open positions
+                dup = any(
+                    p["symbol"] == symbol and p["direction"] == direction
+                    for p in self._state["open_positions"]
+                )
+                if dup:
+                    continue
+
+                # Open position from pending order
+                position = self._open_from_pending(order, fill_price)
+                if position:
+                    filled_positions.append(position)
+
+            self._state["pending_orders"] = still_pending
+            if filled_positions:
+                self._save_state()
+
+        return filled_positions
+
+    def _open_from_pending(self, order: dict, fill_price: float) -> dict | None:
+        """
+        Convert a filled pending limit order into an active position.
+        fill_price is the zone boundary where the limit order triggered.
+        Called inside lock from check_pending_orders().
+        """
+        symbol = order["symbol"]
+        direction = order["direction"]
+        is_long = direction == "LONG"
+
+        entry = fill_price
+        sl = order["sl"]
+        tp1 = order["tp1"]
+        tp2 = order["tp2"]
+
+        # Validate TP is still on the correct side of fill price
+        if is_long and (tp1 <= entry or tp2 <= entry):
+            logger.info(
+                f"[PAPER] Pending {symbol} LONG: TP {tp1:.4f}/{tp2:.4f} ≤ fill {entry:.4f} — invalid"
+            )
+            return None
+        if not is_long and (tp1 >= entry or tp2 >= entry):
+            logger.info(
+                f"[PAPER] Pending {symbol} SHORT: TP {tp1:.4f}/{tp2:.4f} ≥ fill {entry:.4f} — invalid"
+            )
+            return None
+
+        balance = self._state["balance"]
+        sl_dist_pct = abs(entry - sl) / entry
+        if sl_dist_pct < 0.0001:
+            logger.warning(f"[PAPER] Pending {symbol}: SL distance too small")
+            return None
+
+        margin_used = balance * PAPER_MARGIN_PER_TRADE_PCT
+        margin_used = min(margin_used, balance * 0.50)
+        position_size_usd = margin_used * PAPER_LEVERAGE
+        risk_amount = position_size_usd * sl_dist_pct
+        qty = position_size_usd / entry
+
+        now = datetime.now(tz=_WIB)
+        position = {
+            "id": order["id"],
+            "symbol": symbol,
+            "direction": direction,
+            "entry_price": round(entry, 6),
+            "sl": round(sl, 6),
+            "sl_original": round(sl, 6),
+            "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6),
+            "qty": round(qty, 6),
+            "qty_remaining": round(qty, 6),
+            "position_size_usd": round(position_size_usd, 4),
+            "margin_used": round(margin_used, 4),
+            "leverage": PAPER_LEVERAGE,
+            "risk_amount": round(risk_amount, 4),
+            "strategy": order.get("strategy", "unknown"),
+            "score": order.get("score", 0),
+            "rr": round(order.get("rr", 0.0), 2),
+            "opened_at": now.isoformat(),
+            "tp1_hit": False,
+            "sl_moved_to_be": False,
+            "realized_pnl": 0.0,
+            "status": "open",
+            "from_pending": True,
+        }
+
+        self._state["open_positions"].append(position)
+        logger.info(
+            f"[PAPER] Pending FILLED → {symbol} {direction} @ {entry:.4f} | "
+            f"margin=${margin_used:.2f}, pos=${position_size_usd:.2f}, risk=${risk_amount:.2f}"
+        )
+        return position
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _count_today_trades(self) -> int:
@@ -614,6 +866,7 @@ class PaperTrader:
                 state.setdefault("peak_balance", state.get("balance", PAPER_INITIAL_BALANCE))
                 state.setdefault("open_positions", [])
                 state.setdefault("closed_positions", [])
+                state.setdefault("pending_orders", [])
 
                 # Purge stale open positions (older than their max_duration)
                 now = datetime.now(tz=_WIB)
@@ -646,6 +899,7 @@ class PaperTrader:
             "peak_balance": PAPER_INITIAL_BALANCE,
             "open_positions": [],
             "closed_positions": [],
+            "pending_orders": [],
         }
 
     def _save_state(self) -> None:

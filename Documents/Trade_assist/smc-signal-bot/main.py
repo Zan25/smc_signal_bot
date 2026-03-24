@@ -213,11 +213,16 @@ def _scan_strategy(strategy: dict) -> None:
             logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
         if PAPER_TRADING_ENABLED and _paper_trader is not None:
             try:
-                position = _paper_trader.open_position(setup)
-                if position:
+                result = _paper_trader.open_position(setup)
+                if result:
                     status = _paper_trader.get_status()
-                    position["balance_at_open"] = f"{status['balance']:.2f}"
-                    _alerter.send_paper_entry(position)
+                    result["balance_at_open"] = f"{status['balance']:.2f}"
+                    if result.get("status") == "pending":
+                        # Approaching signal: pending limit order placed
+                        _alerter.send_paper_pending(result)
+                    else:
+                        # At-zone signal: position opened immediately
+                        _alerter.send_paper_entry(result)
             except Exception as pe:
                 logger.error(f"[PAPER] Error open position {sym}: {pe}")
 
@@ -243,10 +248,14 @@ def check_paper_positions() -> None:
     try:
         exits = _paper_trader.check_positions(_fetcher)
         for pos, reason in exits:
-            # Attach balance after exit for notification
             status = _paper_trader.get_status()
             pos["balance_after"] = f"{status['balance']:.2f}"
-            _alerter.send_paper_exit(pos, reason)
+            if reason == "PENDING_FILLED":
+                # Pending limit order filled — send entry notification
+                pos["balance_at_open"] = pos["balance_after"]
+                _alerter.send_paper_entry(pos)
+            else:
+                _alerter.send_paper_exit(pos, reason)
     except Exception as e:
         logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
 

@@ -17,6 +17,7 @@ logger = get_logger(__name__)
 
 _WIB = pytz.timezone(TIMEZONE)
 _DEDUP_EXPIRY_HOURS = 8  # match longest cooldown window (swing=8h)
+_PENDING_EXPIRY_HOURS_MAP = {"scalp": 1, "intraday": 2, "swing": 6}
 
 
 class TelegramAlerter:
@@ -137,6 +138,54 @@ class TelegramAlerter:
             f"📊 Leverage: {position['leverage']}x | RR: 1:{position['rr']:.1f} | Score: {position['score']}/8\n"
             f"💵 Margin: *${margin:.2f}* | Posisi: ${pos_size:.0f} | Risk: ${risk:.2f}\n"
             f"💼 Balance: *${position.get('balance_at_open', '?')}*\n"
+            f"⏰ {ts_str}"
+        )
+        return self._send(msg)
+
+    def send_paper_pending(self, order: dict) -> bool:
+        """Send notification when a pending limit order is placed (approaching signal)."""
+        is_long = order["direction"] == "LONG"
+        dir_emoji = "🟢" if is_long else "🔴"
+        order_type = "LIMIT BUY" if is_long else "LIMIT SELL"
+        fill_price = order.get("fill_price", 0)
+        strategy = order.get("strategy", "")
+        strategy_map = {"swing": "📈 Swing", "intraday": "⏱️ Intraday", "scalp": "⚡ Scalp"}
+        strategy_label = strategy_map.get(strategy, strategy)
+
+        def fmt(p: float) -> str:
+            if p >= 1000:
+                return f"{p:,.2f}"
+            elif p >= 1:
+                return f"{p:.4f}"
+            else:
+                return f"{p:.6f}"
+
+        sl = order.get("sl", 0)
+        tp1 = order.get("tp1", 0)
+        tp2 = order.get("tp2", 0)
+        sl_pct = abs(fill_price - sl) / fill_price * 100 if fill_price > 0 else 0
+        tp1_pct = abs(tp1 - fill_price) / fill_price * 100 if fill_price > 0 else 0
+        tp2_pct = abs(tp2 - fill_price) / fill_price * 100 if fill_price > 0 else 0
+        expiry_hours = _PENDING_EXPIRY_HOURS_MAP.get(strategy, 2)
+
+        try:
+            ts_str = datetime.fromisoformat(order["created_at"]).strftime("%d/%m/%Y %H:%M WIB")
+        except Exception:
+            ts_str = "?"
+
+        msg = (
+            f"⏳ *PENDING LIMIT ORDER — {order_type}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{dir_emoji} *{order['symbol']} {order['direction']}* • {strategy_label}\n"
+            f"\n"
+            f"📋 Limit order ditempatkan di:\n"
+            f"💰 *Fill Price:* `{fmt(fill_price)}`\n"
+            f"🛑 *Stop Loss:* `{fmt(sl)}` (-{sl_pct:.1f}%)\n"
+            f"🎯 *TP1:* `{fmt(tp1)}` (+{tp1_pct:.1f}%)\n"
+            f"✅ *TP2:* `{fmt(tp2)}` (+{tp2_pct:.1f}%)\n"
+            f"\n"
+            f"📊 RR: 1:{order.get('rr', 0):.1f} | Score: {order.get('score', 0)}/9\n"
+            f"⏱️ Expires: {expiry_hours}h\n"
             f"⏰ {ts_str}"
         )
         return self._send(msg)
