@@ -138,7 +138,32 @@ class PaperTrader:
             if setup.get("approaching", False):
                 return self._add_pending_order(setup)
 
-            # Guard: harga harus di dalam zona OB/FVG penuh — signal stale jika sudah keluar zona
+            is_long = direction == "LONG"
+
+            # Guard: harga harus di dalam CE zone (half OB — optimal entry area)
+            # CE zone = upper half of OB for LONG, lower half for SHORT (SMC standard)
+            # LONG CE:  entry_low (ob_midpoint) → entry_high (ob_zone_high)
+            # SHORT CE: entry_low (ob_zone_low)  → entry_high (ob_midpoint)
+            # Jika price sudah terlalu dalam ke OB (past midpoint), SL tinggal sedikit
+            # → entry suboptimal, skip dan tunggu setup baru
+            ce_low  = float(setup.get("entry_low",  zone_low))
+            ce_high = float(setup.get("entry_high", zone_high))
+
+            if current_price < ce_low or current_price > ce_high:
+                zone_width = zone_high - zone_low if zone_high != zone_low else 1
+                depth_pct = (
+                    (ce_low - current_price) / zone_width * 100
+                    if is_long
+                    else (current_price - ce_high) / zone_width * 100
+                )
+                logger.info(
+                    f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
+                    f"past CE zone [{ce_low:.4f}-{ce_high:.4f}] "
+                    f"({depth_pct:.0f}% terlalu dalam ke OB — SL terlalu dekat)"
+                )
+                return None
+
+            # Guard: full zone check (price must still be inside OB at all)
             if current_price < zone_low or current_price > zone_high:
                 logger.info(
                     f"[PAPER] Skip {symbol} {direction}: price {current_price:.4f} "
@@ -146,12 +171,11 @@ class PaperTrader:
                 )
                 return None
 
-            # Fill at current market price (market fill when price enters zone)
+            # Fill at current market price — now guaranteed to be in CE zone (optimal half)
             entry = current_price
 
             # Guard: TP1/TP2 must be on the correct side of entry
             # (if TP1 ≤ entry for LONG or TP1 ≥ entry for SHORT, the setup is degenerate)
-            is_long = direction == "LONG"
             if is_long and (tp1 <= entry or tp2 <= entry):
                 logger.info(f"[PAPER] Skip {symbol} LONG: TP {tp1:.4f}/{tp2:.4f} ≤ entry {entry:.4f}")
                 return None
