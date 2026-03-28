@@ -6,6 +6,9 @@ Supported commands:
   /price          — inline keyboard to pick a pair
   /price BTC      — direct price check for a specific pair
   /porto          — paper trading portfolio: balance, open positions, entry/SL/TP
+  /wr             — win rate breakdown per strategy (all time)
+  /wr 7           — win rate last 7 days
+  /wr 30          — win rate last 30 days
 """
 
 import time
@@ -90,6 +93,16 @@ class TelegramCommandHandler:
 
         if text.startswith("/porto"):
             self._send_porto(chat_id)
+        elif text.startswith("/wr"):
+            # /wr → all time | /wr 7 → last 7 days | /wr 30 → last 30 days
+            parts = text.split(maxsplit=1)
+            days = None
+            if len(parts) == 2:
+                try:
+                    days = int(parts[1])
+                except ValueError:
+                    pass
+            self._send_wr(chat_id, days=days)
         elif text.startswith("/price"):
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
@@ -260,6 +273,84 @@ class TelegramCommandHandler:
         except Exception as e:
             logger.error(f"Error sending porto: {e}", exc_info=True)
             self._send(chat_id, f"Error saat mengambil data portfolio: {e}")
+
+    # ── Win rate breakdown ─────────────────────────────────────────────────────
+
+    def _send_wr(self, chat_id: int, days: int | None = None) -> None:
+        """Format and send per-strategy win rate breakdown."""
+        if self._paper_trader is None:
+            self._send(chat_id, "Paper trading tidak aktif.")
+            return
+
+        try:
+            stats = self._paper_trader.get_strategy_stats(days=days)
+            status = self._paper_trader.get_status()
+            balance = status["balance"]
+            initial = status["initial_balance"]
+            roi = (balance - initial) / initial * 100 if initial > 0 else 0.0
+            roi_sign = "+" if roi >= 0 else ""
+            roi_emoji = "📈" if roi >= 0 else "📉"
+
+            period = f"{days} hari terakhir" if days else "All Time"
+            now_str = datetime.now(tz=_WIB).strftime("%d %b %Y %H:%M WIB")
+
+            lines = [
+                f"📊 *WIN RATE BREAKDOWN — {period}*",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"💰 Balance: *${balance:.2f}* {roi_emoji} *{roi_sign}{roi:.2f}%*",
+                "",
+            ]
+
+            strategy_order = ["swing", "intraday", "scalp"]
+            emoji_map = {"swing": "📈", "intraday": "⏱️", "scalp": "⚡"}
+
+            if not stats:
+                lines.append("_Belum ada data closed trades._")
+            else:
+                for strat in strategy_order:
+                    if strat not in stats:
+                        continue
+                    s = stats[strat]
+                    emoji = emoji_map.get(strat, "📊")
+                    wr = s["win_rate"]
+                    wr_emoji = "✅" if wr >= 55 else "⚠️" if wr >= 40 else "❌"
+                    pnl_sign = "+" if s["pnl"] >= 0 else ""
+                    pnl_emoji = "📈" if s["pnl"] >= 0 else "📉"
+
+                    # Exit breakdown
+                    exit_parts = []
+                    if s["tp2"]:
+                        exit_parts.append(f"TP2×{s['tp2']}")
+                    if s["tp1"]:
+                        exit_parts.append(f"TP1×{s['tp1']}")
+                    if s["sl"]:
+                        exit_parts.append(f"SL×{s['sl']}")
+                    if s["sl_be"]:
+                        exit_parts.append(f"BE×{s['sl_be']}")
+                    if s["expired"]:
+                        exit_parts.append(f"EXP×{s['expired']}")
+                    if s["eod"]:
+                        exit_parts.append(f"EOD×{s['eod']}")
+                    exit_str = " | ".join(exit_parts) if exit_parts else "–"
+
+                    lines += [
+                        f"{emoji} *{strat.upper()}* — {s['total']} trade",
+                        f"  {wr_emoji} WR: *{wr:.1f}%* ({s['wins']} menang / {s['losses']} kalah)",
+                        f"  {pnl_emoji} P&L: *{pnl_sign}${s['pnl']:.2f}*",
+                        f"  Exit: {exit_str}",
+                        "",
+                    ]
+
+            lines += [
+                "━━━━━━━━━━━━━━━━━━━━",
+                "_Gunakan /wr 7 untuk 7 hari, /wr 30 untuk 30 hari_",
+                f"⏰ {now_str}",
+            ]
+            self._send(chat_id, "\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"Error sending WR: {e}", exc_info=True)
+            self._send(chat_id, f"Error saat mengambil data WR: {e}")
 
     # ── Price fetch & reply ────────────────────────────────────────────────────
 

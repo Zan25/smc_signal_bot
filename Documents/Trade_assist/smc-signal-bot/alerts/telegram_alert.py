@@ -375,6 +375,26 @@ class TelegramAlerter:
         closed_today = summary["total_closed_today"]
         still_open = summary["open_positions"]
 
+        # Per-strategy WR (7-day rolling)
+        stats_7d = summary.get("strategy_stats_7d", {})
+        strategy_order = ["swing", "intraday", "scalp"]
+        emoji_map = {"swing": "📈", "intraday": "⏱️", "scalp": "⚡"}
+        wr_lines = []
+        for strat in strategy_order:
+            if strat not in stats_7d:
+                continue
+            s = stats_7d[strat]
+            emoji = emoji_map.get(strat, "📊")
+            wr = s["win_rate"]
+            wr_emoji = "✅" if wr >= 55 else "⚠️" if wr >= 40 else "❌"
+            pnl_sign = "+" if s["pnl"] >= 0 else ""
+            wr_lines.append(
+                f"  {emoji} {strat.upper()}: {wr_emoji} *{wr:.0f}%* "
+                f"({s['wins']}W/{s['losses']}L) {pnl_sign}${s['pnl']:.2f}"
+            )
+
+        wr_section = "\n📊 *WR 7 Hari (per strategi):*\n" + "\n".join(wr_lines) if wr_lines else ""
+
         msg = (
             f"📊 *RINGKASAN HARIAN — {summary['date']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -386,7 +406,9 @@ class TelegramAlerter:
             f"• Closed: {closed_today} posisi\n"
             f"• Masih open: {still_open} posisi\n"
             f"• Total closed semua waktu: {summary['total_closed']}\n"
+            f"{wr_section}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"_Ketik /wr untuk detail lengkap_\n"
             f"⏰ 23:59 WIB"
         )
         return self._send(msg)
@@ -394,13 +416,14 @@ class TelegramAlerter:
     def send_startup_message(self, pairs: list[str]) -> bool:
         """Send bot startup notification."""
         msg = (
-            f"🤖 *SMC Signal Bot Started* v2.1\n"
+            f"🤖 *SMC Signal Bot Started* v2.2\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 {len(pairs)} pairs dipantau (parallel scan)\n"
-            f"✅ Range trading mode: ON (dead zone 40-60%)\n"
-            f"✅ Scalp/Intraday: score 2/8 min, Swing: 3/8\n"
-            f"✅ TF conflict: 1 TF boleh beda (soft check)\n"
+            f"✅ Intraday: OB lookback 7 hari, max 2 TF konflik\n"
+            f"✅ Swing: OB lookback 27 hari, max 1 TF konflik\n"
+            f"✅ Bear flag: 4H bear + 1H bull = SHORT setup\n"
             f"🔫 Forced trade: 09:00, 13:00, 18:00 WIB\n"
+            f"📈 Commands: /porto /wr /wr 7 /price\n"
             f"⏰ {datetime.now(tz=_WIB).strftime('%Y-%m-%d %H:%M %Z')}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Bot aktif dan siap mengirim signal!"

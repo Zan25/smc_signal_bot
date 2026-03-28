@@ -546,6 +546,73 @@ class PaperTrader:
             self._save_state()
         return closed_list
 
+    def get_strategy_stats(self, days: int | None = None) -> dict:
+        """
+        Per-strategy WR breakdown.
+
+        Args:
+            days: Lookback window in days. None = all time.
+
+        Returns:
+            Dict keyed by strategy name with WR stats.
+        """
+        with self._lock:
+            closed = list(self._state["closed_positions"])
+
+        now = datetime.now(tz=_WIB)
+        cutoff = now - timedelta(days=days) if days else None
+
+        stats: dict[str, dict] = {}
+        for pos in closed:
+            if cutoff:
+                try:
+                    exit_dt = datetime.fromisoformat(pos.get("exit_at", pos["opened_at"]))
+                    if not exit_dt.tzinfo:
+                        exit_dt = _WIB.localize(exit_dt)
+                    if exit_dt < cutoff:
+                        continue
+                except Exception:
+                    continue
+
+            strat = pos.get("strategy", "unknown")
+            if strat not in stats:
+                stats[strat] = {
+                    "total": 0, "wins": 0, "losses": 0,
+                    "pnl": 0.0,
+                    "tp2": 0, "tp1": 0, "sl": 0, "sl_be": 0,
+                    "expired": 0, "eod": 0,
+                }
+
+            s = stats[strat]
+            s["total"] += 1
+            pnl = pos.get("exit_pnl", 0) or 0.0
+            s["pnl"] += pnl
+
+            reason = pos.get("exit_reason", "") or ""
+            if "TP2" in reason:
+                s["tp2"] += 1
+            elif "TP1" in reason:
+                s["tp1"] += 1
+            elif reason == "SL_HIT_BE" or "BE" in reason:
+                s["sl_be"] += 1
+            elif "SL" in reason:
+                s["sl"] += 1
+            elif "EOD" in reason:
+                s["eod"] += 1
+            elif "EXPIRED" in reason:
+                s["expired"] += 1
+
+            if pnl > 0:
+                s["wins"] += 1
+            else:
+                s["losses"] += 1
+
+        for s in stats.values():
+            s["win_rate"] = round(s["wins"] / s["total"] * 100, 1) if s["total"] > 0 else 0.0
+            s["pnl"] = round(s["pnl"], 2)
+
+        return stats
+
     def get_daily_summary(self) -> dict:
         """Ambil statistik trading hari ini untuk daily summary Telegram notification."""
         today = datetime.now(tz=_WIB).date()
@@ -581,6 +648,7 @@ class PaperTrader:
                 "total_closed_today": len(closed_today),
                 "open_positions": len(self._state["open_positions"]),
                 "total_closed": len(self._state["closed_positions"]),
+                "strategy_stats_7d": self.get_strategy_stats(days=7),
             }
 
     # ── Pending limit order management ────────────────────────────────────────
