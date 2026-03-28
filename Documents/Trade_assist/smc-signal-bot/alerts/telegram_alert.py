@@ -408,7 +408,7 @@ class TelegramAlerter:
             f"• Total closed semua waktu: {summary['total_closed']}\n"
             f"{wr_section}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"_Ketik /wr untuk detail lengkap_\n"
+            f"_Ketik /porto untuk detail lengkap_\n"
             f"⏰ 23:59 WIB"
         )
         return self._send(msg)
@@ -423,7 +423,7 @@ class TelegramAlerter:
             f"✅ Swing: OB lookback 27 hari, max 1 TF konflik\n"
             f"✅ Bear flag: 4H bear + 1H bull = SHORT setup\n"
             f"🔫 Forced trade: 09:00, 13:00, 18:00 WIB\n"
-            f"📈 Commands: /porto /wr /wr 7 /price\n"
+            f"📈 Commands: /porto (portfolio + WR) /price\n"
             f"⏰ {datetime.now(tz=_WIB).strftime('%Y-%m-%d %H:%M %Z')}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Bot aktif dan siap mengirim signal!"
