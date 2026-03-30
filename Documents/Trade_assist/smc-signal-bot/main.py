@@ -6,12 +6,17 @@ Initializes all modules and runs the APScheduler for periodic scanning.
 import sys
 import signal
 import logging
+import socket
 import threading
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Global socket timeout — prevents API calls from hanging indefinitely
+# Without this, a stuck TCP connection can freeze the entire bot forever
+socket.setdefaulttimeout(45)
 
 # ── Windows asyncio fix (must be before any asyncio/telegram imports) ─────────
 if sys.platform == "win32":
@@ -242,22 +247,31 @@ def scan_scalp() -> None:
 
 
 def check_paper_positions() -> None:
-    """Check open paper trade positions against current prices. Runs every 5 minutes."""
+    """Check open paper trade positions against current prices. Runs every minute.
+    Wrapped with 50s hard timeout to prevent API hangs from freezing the scheduler.
+    """
     if not PAPER_TRADING_ENABLED or _paper_trader is None:
         return
-    try:
+
+    def _inner():
         exits = _paper_trader.check_positions(_fetcher)
         for pos, reason in exits:
             status = _paper_trader.get_status()
             pos["balance_after"] = f"{status['balance']:.2f}"
             if reason == "PENDING_FILLED":
-                # Pending limit order filled — send entry notification
                 pos["balance_at_open"] = pos["balance_after"]
                 _alerter.send_paper_entry(pos)
             else:
                 _alerter.send_paper_exit(pos, reason)
-    except Exception as e:
-        logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(_inner)
+        try:
+            future.result(timeout=50)
+        except FuturesTimeoutError:
+            logger.error("[PAPER] check_positions timed out after 50s — skipping this cycle")
+        except Exception as e:
+            logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
 
 
 def eod_close_positions() -> None:

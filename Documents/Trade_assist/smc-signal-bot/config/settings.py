@@ -38,12 +38,11 @@ SWING_PAIRS: list[str] = [
     "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT", "APT/USDT",
 ]
 
-# Top 20 liquid pairs — for intraday
+# Top 12 liquid pairs — for intraday (dikurangi dari 20 agar scan selesai < 5 menit)
 INTRADAY_PAIRS: list[str] = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
     "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
-    "TRX/USDT", "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT",
-    "ARB/USDT", "NEAR/USDT", "APT/USDT", "OP/USDT", "SUI/USDT",
+    "TRX/USDT", "LTC/USDT",
 ]
 
 # Top 30 liquid pairs — for scalping (more variety = more zone opportunities)
@@ -136,7 +135,7 @@ STRATEGIES: list[dict] = [
         "ob_tf": "1h",
         "entry_tf": "5m",
         "pairs": INTRADAY_PAIRS,
-        "scan_interval_minutes": 5,
+        "scan_interval_minutes": 10,       # 5→10 menit: 12 pair × 3 TF butuh waktu, hindari job skip
         "min_confidence": 3,
         "min_rr": 1.5,
         "ob_fresh_lookback": 168,          # 100→168: 1H×168 = 7 hari, OB bear flag tetap valid

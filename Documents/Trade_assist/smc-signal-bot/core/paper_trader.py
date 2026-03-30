@@ -298,6 +298,7 @@ class PaperTrader:
                         pos["exit_price"] = current_price
                         pos["exit_pnl"] = pos["realized_pnl"]
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
+                        pos["exit_reason"] = EXIT_EXPIRED
                         pos["partial"] = False
                         self._state["balance"] += pnl_exp
                         self._update_peak()
@@ -360,6 +361,7 @@ class PaperTrader:
                         pos["exit_price"] = exit_price
                         pos["exit_pnl"] = pos["realized_pnl"]
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
+                        pos["exit_reason"] = exit_reason
                         pos["partial"] = False
                         self._state["balance"] += pnl_final
                         self._update_peak()
@@ -394,6 +396,7 @@ class PaperTrader:
                         pos["exit_price"] = exit_price
                         pos["exit_pnl"] = pnl
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
+                        pos["exit_reason"] = exit_reason
                         pos["partial"] = False
                         self._state["balance"] += pnl
                         self._update_peak()
@@ -630,6 +633,42 @@ class PaperTrader:
                 s["wins"] += 1
             else:
                 s["losses"] += 1
+
+        for s in stats.values():
+            s["win_rate"] = round(s["wins"] / s["total"] * 100, 1) if s["total"] > 0 else 0.0
+            s["pnl"] = round(s["pnl"], 2)
+
+        return stats
+
+    def get_strategy_stats(self) -> dict:
+        """Return all-time win rate and P&L breakdown per strategy (for /porto command)."""
+        with self._lock:
+            closed = list(self._state["closed_positions"])
+
+        stats: dict[str, dict] = {}
+        for pos in closed:
+            strat = pos.get("strategy", "unknown")
+            if strat not in stats:
+                stats[strat] = {
+                    "total": 0, "wins": 0, "losses": 0, "pnl": 0.0,
+                    "win_rate": 0.0,
+                    "tp2": 0, "tp1": 0, "sl": 0, "sl_be": 0, "expired": 0, "eod": 0,
+                }
+            s = stats[strat]
+            s["total"] += 1
+            pnl = pos.get("exit_pnl", 0)
+            s["pnl"] += pnl
+            if pnl > 0:
+                s["wins"] += 1
+            else:
+                s["losses"] += 1
+            reason = pos.get("exit_reason", "")
+            if reason == EXIT_TP2:    s["tp2"] += 1
+            elif reason == EXIT_TP1:  s["tp1"] += 1
+            elif reason == EXIT_SL:   s["sl"] += 1
+            elif reason == EXIT_SL_BE: s["sl_be"] += 1
+            elif reason == EXIT_EXPIRED: s["expired"] += 1
+            elif reason == "EXIT_EOD": s["eod"] += 1
 
         for s in stats.values():
             s["win_rate"] = round(s["wins"] / s["total"] * 100, 1) if s["total"] > 0 else 0.0

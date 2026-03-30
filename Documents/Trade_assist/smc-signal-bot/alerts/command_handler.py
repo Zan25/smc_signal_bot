@@ -229,11 +229,12 @@ class TelegramCommandHandler:
                         current_price = self._fetcher.get_current_price(perp_sym)
                         if current_price is not None:
                             fraction = pos["qty_remaining"] / pos["qty"] if pos.get("qty", 0) > 0 else 1.0
-                            notional = pos["position_notional"] * fraction
+                            position_size_usd = pos.get("position_size_usd", 0)
+                            remaining_size = position_size_usd * fraction
                             price_chg = (current_price - entry) / entry
                             if not is_long:
                                 price_chg = -price_chg
-                            upnl = price_chg * notional * pos["leverage"]
+                            upnl = price_chg * remaining_size
                             upnl_sign = "+" if upnl >= 0 else ""
                             upnl_emoji = "📈" if upnl >= 0 else "📉"
                             unrealized_str = f"\n   {upnl_emoji} P&L sementara: *{upnl_sign}${upnl:.2f}*"
