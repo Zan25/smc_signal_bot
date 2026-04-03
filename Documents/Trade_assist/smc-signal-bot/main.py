@@ -174,6 +174,32 @@ def _scan_pair(display_sym: str, perp_sym: str, strategy: dict) -> tuple:
         return display_sym, []
 
 
+def _get_btc_bias(threshold_pct: float = 0.025) -> str:
+    """Check BTC last completed 4H candle to determine market bias.
+
+    Returns 'bearish', 'bullish', or 'neutral'.
+    Used to filter counter-trend paper entries on strongly trending days.
+    Fails safe to 'neutral' on any fetch error so it never blocks trades unexpectedly.
+    """
+    try:
+        df = _fetcher.fetch_ohlcv("BTC/USDT:USDT", "4h", limit=3)
+        if df is None or len(df) < 2:
+            return "neutral"
+        # Use last COMPLETED candle (iloc[-2]), not the in-progress one
+        last = df.iloc[-2]
+        change = (float(last["close"]) - float(last["open"])) / float(last["open"])
+        if change <= -threshold_pct:
+            logger.info(f"[BIAS] BTC 4H last candle: {change*100:.2f}% → BEARISH bias")
+            return "bearish"
+        if change >= threshold_pct:
+            logger.info(f"[BIAS] BTC 4H last candle: {change*100:.2f}% → BULLISH bias")
+            return "bullish"
+        return "neutral"
+    except Exception as e:
+        logger.debug(f"[BIAS] BTC bias check failed: {e} — defaulting to neutral")
+        return "neutral"
+
+
 def _scan_strategy(strategy: dict) -> None:
     """Scan all pairs for a given strategy in parallel (4 workers).
 
@@ -207,6 +233,11 @@ def _scan_strategy(strategy: dict) -> None:
         skipped = len(all_setups) - max_signals
         logger.info(f"[{strat_name}] {len(all_setups)} setup valid → ambil {max_signals} terbaik, skip {skipped} lainnya")
 
+    # BTC bias check — once per scan cycle, used to filter counter-trend paper entries
+    btc_bias = "neutral"
+    if PAPER_TRADING_ENABLED and _paper_trader is not None:
+        btc_bias = _get_btc_bias()
+
     signals_sent = 0
     for setup in top_setups:
         sym = setup["symbol"]
@@ -218,16 +249,22 @@ def _scan_strategy(strategy: dict) -> None:
             logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
         if PAPER_TRADING_ENABLED and _paper_trader is not None:
             try:
-                result = _paper_trader.open_position(setup)
-                if result:
-                    status = _paper_trader.get_status()
-                    result["balance_at_open"] = f"{status['balance']:.2f}"
-                    if result.get("status") == "pending":
-                        # Approaching signal: pending limit order placed
-                        _alerter.send_paper_pending(result)
-                    else:
-                        # At-zone signal: position opened immediately
-                        _alerter.send_paper_entry(result)
+                direction = setup["direction"]
+                if btc_bias == "bearish" and direction == "LONG":
+                    logger.info(f"[PAPER] Skip {sym} LONG: BTC 4H bias bearish — counter-trend, no paper entry")
+                elif btc_bias == "bullish" and direction == "SHORT":
+                    logger.info(f"[PAPER] Skip {sym} SHORT: BTC 4H bias bullish — counter-trend, no paper entry")
+                else:
+                    result = _paper_trader.open_position(setup)
+                    if result:
+                        status = _paper_trader.get_status()
+                        result["balance_at_open"] = f"{status['balance']:.2f}"
+                        if result.get("status") == "pending":
+                            # Approaching signal: pending limit order placed
+                            _alerter.send_paper_pending(result)
+                        else:
+                            # At-zone signal: position opened immediately
+                            _alerter.send_paper_entry(result)
             except Exception as pe:
                 logger.error(f"[PAPER] Error open position {sym}: {pe}")
 

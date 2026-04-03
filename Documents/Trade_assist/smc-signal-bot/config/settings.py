@@ -142,7 +142,7 @@ STRATEGIES: list[dict] = [
         "ob_approach_pct": 0.03,          # 2%→3%: lebih banyak approaching signal untuk major coins
         "max_signals_per_scan": 3,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
-        "min_sl_pct": 0.003,              # SL minimum 0.3% dari entry (10x leverage)
+        "min_sl_pct": 0.005,              # SL minimum 0.5% dari entry (was 0.3% — too tight)
         "max_htf_conflicts": 2,           # bear flag: 4H bearish + 1H bullish + 15m bullish = 2 konflik = OK
     },
     {
