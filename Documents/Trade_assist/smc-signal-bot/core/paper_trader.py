@@ -126,10 +126,12 @@ class PaperTrader:
                 logger.info(f"[PAPER] Skip {symbol} {direction}: max {PAPER_MAX_POSITIONS} concurrent positions")
                 return None
 
-            # Guard: no duplicate symbol+direction
+            # Guard: no duplicate symbol — prevent long+short on same coin simultaneously
             for pos in open_positions:
-                if pos["symbol"] == symbol and pos["direction"] == direction:
-                    logger.info(f"[PAPER] Skip {symbol} {direction}: position already open")
+                if pos["symbol"] == symbol:
+                    logger.info(
+                        f"[PAPER] Skip {symbol} {direction}: already have {pos['direction']} open on same symbol"
+                    )
                     return None
 
             # Approaching signal: add as pending limit order at zone boundary
@@ -743,15 +745,15 @@ class PaperTrader:
             logger.info(f"[PAPER] Skip pending {symbol} {direction}: max {PAPER_MAX_PENDING} pending orders")
             return None
 
-        # Guard: no duplicate symbol+direction in pending
+        # Guard: no duplicate symbol in pending (any direction)
         for p in pending_orders:
-            if p["symbol"] == symbol and p["direction"] == direction:
-                logger.info(f"[PAPER] Skip pending {symbol} {direction}: already in queue")
+            if p["symbol"] == symbol:
+                logger.info(f"[PAPER] Skip pending {symbol} {direction}: already have {p['direction']} pending on same symbol")
                 return None
 
-        # Guard: no duplicate in open positions
+        # Guard: no open position on same symbol (any direction)
         for pos in self._state["open_positions"]:
-            if pos["symbol"] == symbol and pos["direction"] == direction:
+            if pos["symbol"] == symbol:
                 return None
 
         # Fill price = zone boundary where price enters first
