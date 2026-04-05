@@ -225,14 +225,17 @@ class PaperTrader:
                 "sl_moved_to_be": False,
                 "realized_pnl": 0.0,
                 "status": "open",
+                "margin_reserved": True,   # v2 accounting: margin deducted from balance on open
             }
 
             open_positions.append(position)
+            self._state["balance"] -= margin_used   # reserve margin from free balance
             self._save_state()
             logger.info(
                 f"[PAPER] Opened {symbol} {direction} @ {entry:.4f} | "
                 f"margin=${margin_used:.2f}, pos=${position_size_usd:.2f}, "
-                f"risk=${risk_amount:.2f}, qty={qty:.6f}, strategy={strategy}"
+                f"risk=${risk_amount:.2f}, qty={qty:.6f}, strategy={strategy} | "
+                f"free_balance=${self._state['balance']:.2f}"
             )
             return position
 
@@ -302,7 +305,7 @@ class PaperTrader:
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                         pos["exit_reason"] = EXIT_EXPIRED
                         pos["partial"] = False
-                        self._state["balance"] += pnl_exp
+                        self._state["balance"] += pnl_exp + pos.get("margin_used", 0)
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), EXIT_EXPIRED))
@@ -325,7 +328,7 @@ class PaperTrader:
                         pos["tp1_hit"] = True
                         pos["sl"] = entry  # move SL to breakeven
                         pos["sl_moved_to_be"] = True
-                        self._state["balance"] += pnl_partial
+                        self._state["balance"] += pnl_partial + pos.get("margin_used", 0) * 0.5
                         self._update_peak()
 
                         logger.info(
@@ -365,7 +368,7 @@ class PaperTrader:
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                         pos["exit_reason"] = exit_reason
                         pos["partial"] = False
-                        self._state["balance"] += pnl_final
+                        self._state["balance"] += pnl_final + pos.get("margin_used", 0) * 0.5
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), exit_reason))
@@ -400,7 +403,7 @@ class PaperTrader:
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                         pos["exit_reason"] = exit_reason
                         pos["partial"] = False
-                        self._state["balance"] += pnl
+                        self._state["balance"] += pnl + pos.get("margin_used", 0)
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), exit_reason))
@@ -563,7 +566,7 @@ class PaperTrader:
                 pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                 pos["exit_reason"] = "EXIT_EOD"
                 pos["partial"] = False
-                self._state["balance"] += pnl
+                self._state["balance"] += pnl + pos.get("margin_used", 0)
                 self._state["closed_positions"].append(pos)
                 closed_list.append((pos, current_price))
                 logger.info(
@@ -943,12 +946,15 @@ class PaperTrader:
             "realized_pnl": 0.0,
             "status": "open",
             "from_pending": True,
+            "margin_reserved": True,   # v2 accounting: margin deducted from balance on open
         }
 
         self._state["open_positions"].append(position)
+        self._state["balance"] -= margin_used   # reserve margin from free balance
         logger.info(
             f"[PAPER] Pending FILLED → {symbol} {direction} @ {entry:.4f} | "
-            f"margin=${margin_used:.2f}, pos=${position_size_usd:.2f}, risk=${risk_amount:.2f}"
+            f"margin=${margin_used:.2f}, pos=${position_size_usd:.2f}, risk=${risk_amount:.2f} | "
+            f"free_balance=${self._state['balance']:.2f}"
         )
         return position
 
@@ -1020,6 +1026,25 @@ class PaperTrader:
                 if purged:
                     logger.info(f"[PAPER] Startup purge: {len(purged)} expired positions removed: {purged}")
                 state["open_positions"] = fresh
+
+                # ── Accounting migration v2 ──────────────────────────────────
+                # Positions opened before margin-reservation fix have no
+                # "margin_reserved" flag. They were opened without deducting
+                # margin from balance, so returning margin on close would
+                # inflate the balance. Purge them to start clean.
+                legacy = [p for p in state["open_positions"] if not p.get("margin_reserved")]
+                if legacy:
+                    logger.warning(
+                        f"[PAPER] Migration: purging {len(legacy)} legacy position(s) "
+                        f"opened before margin-reservation accounting fix: "
+                        f"{[p['symbol'] for p in legacy]}"
+                    )
+                    state["open_positions"] = [
+                        p for p in state["open_positions"] if p.get("margin_reserved")
+                    ]
+                    state["pending_orders"] = []
+                    # Recalculate free balance: balance already reflects closed P&L correctly,
+                    # but open positions' margins were never deducted — nothing to adjust.
 
                 logger.info(f"[PAPER] State loaded from {self._state_path}")
                 return state
