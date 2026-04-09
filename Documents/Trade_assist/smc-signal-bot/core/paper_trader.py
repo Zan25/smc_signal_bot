@@ -51,7 +51,7 @@ _MAX_DURATION_HOURS: dict[str, int] = {
 _PENDING_EXPIRY_HOURS: dict[str, int] = {
     "scalp": 1,
     "intraday": 2,
-    "swing": 6,
+    "swing": 3,   # 6→3h: stale swing pending orders during volatile markets are dangerous
 }
 
 
@@ -239,7 +239,7 @@ class PaperTrader:
             )
             return position
 
-    def check_positions(self, fetcher) -> list[tuple[dict, str]]:
+    def check_positions(self, fetcher, market_bias: str = "neutral") -> list[tuple[dict, str]]:
         """
         Check all open positions against current market prices.
         Also checks pending limit orders for fills.
@@ -254,7 +254,7 @@ class PaperTrader:
         exits = []
 
         # Check pending limit orders first — convert filled ones to active positions
-        filled_from_pending = self.check_pending_orders(fetcher)
+        filled_from_pending = self.check_pending_orders(fetcher, market_bias=market_bias)
         for pos in filled_from_pending:
             exits.append((dict(pos), "PENDING_FILLED"))
 
@@ -795,7 +795,7 @@ class PaperTrader:
         )
         return order
 
-    def check_pending_orders(self, fetcher) -> list[dict]:
+    def check_pending_orders(self, fetcher, market_bias: str = "neutral") -> list[dict]:
         """
         Check if any pending limit orders have been filled by current market price.
 
@@ -865,12 +865,18 @@ class PaperTrader:
                     )
                     continue
 
-                # Check duplicate in open positions
-                dup = any(
-                    p["symbol"] == symbol and p["direction"] == direction
-                    for p in self._state["open_positions"]
-                )
+                # Market bias guard — same filter as open_position()
+                if market_bias == "bearish" and direction == "LONG":
+                    logger.info(f"[PAPER] Pending {symbol} LONG filled but BTC bias bearish — cancelling")
+                    continue
+                if market_bias == "bullish" and direction == "SHORT":
+                    logger.info(f"[PAPER] Pending {symbol} SHORT filled but BTC bias bullish — cancelling")
+                    continue
+
+                # Check duplicate — block any open position on same symbol (any direction)
+                dup = any(p["symbol"] == symbol for p in self._state["open_positions"])
                 if dup:
+                    logger.info(f"[PAPER] Pending {symbol} {direction} filled but position already open on same symbol")
                     continue
 
                 # Open position from pending order

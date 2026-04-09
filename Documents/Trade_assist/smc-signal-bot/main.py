@@ -291,7 +291,8 @@ def check_paper_positions() -> None:
         return
 
     def _inner():
-        exits = _paper_trader.check_positions(_fetcher)
+        bias = _get_btc_bias()
+        exits = _paper_trader.check_positions(_fetcher, market_bias=bias)
         for pos, reason in exits:
             status = _paper_trader.get_status()
             pos["balance_after"] = f"{status['balance']:.2f}"

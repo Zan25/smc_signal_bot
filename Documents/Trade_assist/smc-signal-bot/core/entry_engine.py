@@ -178,6 +178,23 @@ def analyze_pair(
     current_price = float(df_ob["close"].iloc[-1])
     logger.info(f"[{strategy['name'].upper()}] Analyzing {symbol} @ {current_price:.4f}")
 
+    # ── 1b. Volatility guard ──────────────────────────────────────────────────
+    # Skip signals when coin is moving too fast (crash/spike event).
+    # Uses 4H data (available for all strategies): close now vs 6 bars ago (~24h).
+    # Only fires during extreme moves — normal 2-5% daily moves won't trigger this.
+    max_24h_change = strategy.get("max_24h_change_pct", 0)
+    if max_24h_change > 0:
+        vol_df = mtf_data.get("4h") or mtf_data.get(ob_tf)
+        if vol_df is not None and len(vol_df) >= 7:
+            ref_close = float(vol_df["close"].iloc[-7])
+            chg_24h = abs((current_price - ref_close) / ref_close) if ref_close else 0
+            if chg_24h > max_24h_change:
+                logger.info(
+                    f"{symbol}: 24h change {chg_24h*100:.1f}% > "
+                    f"{max_24h_change*100:.0f}% — too volatile, skipping"
+                )
+                return setups
+
     # ── 2. Market structure on all needed TFs ─────────────────────────────────
     structs = {tf: market_structure.analyze(mtf_data[tf]) for tf in needed_tfs}
     trends = {tf: structs[tf]["trend"] for tf in htf_tfs}

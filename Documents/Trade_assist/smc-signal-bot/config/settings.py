@@ -118,14 +118,15 @@ STRATEGIES: list[dict] = [
         "entry_tf": "15m",                 # user watches this TF for confirmation
         "pairs": SWING_PAIRS,
         "scan_interval_minutes": 15,
-        "min_confidence": 3,
-        "min_rr": 2.0,
+        "min_confidence": 4,               # 3→4: require stronger confluence (score 3 = OB+FVG only, too weak)
+        "min_rr": 2.5,                     # 2.0→2.5: swing carries more overnight risk, need better reward
         "max_signals_per_scan": 3,
-        "ob_fresh_lookback": 160,          # 120→160: 4H×160 = ~27 hari, OB from longer sell-offs
-        "ob_approach_pct": 0.03,          # alert jika price dalam 3% dari zone (anticipatory)
-        "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room
-        "min_sl_pct": 0.008,              # SL minimum 0.8% dari entry
-        "max_htf_conflicts": 1,           # max 1 TF boleh berbeda dari top TF (swing lebih strict)
+        "ob_fresh_lookback": 160,          # 4H×160 = ~27 days OB history
+        "ob_approach_pct": 0.03,
+        "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room than 1H
+        "min_sl_pct": 0.008,              # SL minimum 0.8% from entry
+        "max_htf_conflicts": 1,           # swing is strict: max 1 TF conflict
+        "max_24h_change_pct": 0.08,       # skip if coin moved >8% in last 24h (crash/spike guard)
     },
     {
         "name": "intraday",
@@ -142,8 +143,9 @@ STRATEGIES: list[dict] = [
         "ob_approach_pct": 0.03,          # 2%→3%: lebih banyak approaching signal untuk major coins
         "max_signals_per_scan": 3,
         "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
-        "min_sl_pct": 0.005,              # SL minimum 0.5% dari entry (was 0.3% — too tight)
+        "min_sl_pct": 0.005,              # SL minimum 0.5% from entry
         "max_htf_conflicts": 2,           # bear flag: 4H bearish + 1H bullish + 15m bullish = 2 konflik = OK
+        "max_24h_change_pct": 0.10,       # skip if coin moved >10% in last 24h (looser than swing)
     },
     {
         "name": "scalp",
