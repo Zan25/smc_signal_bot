@@ -184,7 +184,7 @@ def analyze_pair(
     # Only fires during extreme moves — normal 2-5% daily moves won't trigger this.
     max_24h_change = strategy.get("max_24h_change_pct", 0)
     if max_24h_change > 0:
-        vol_df = mtf_data.get("4h") or mtf_data.get(ob_tf)
+        vol_df = mtf_data.get("4h") if mtf_data.get("4h") is not None else mtf_data.get(ob_tf)
         if vol_df is not None and len(vol_df) >= 7:
             ref_close = float(vol_df["close"].iloc[-7])
             chg_24h = abs((current_price - ref_close) / ref_close) if ref_close else 0
