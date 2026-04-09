@@ -305,7 +305,8 @@ class PaperTrader:
                         pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                         pos["exit_reason"] = EXIT_EXPIRED
                         pos["partial"] = False
-                        self._state["balance"] += pnl_exp + pos.get("margin_used", 0)
+                        # fraction_remaining = 0.5 if TP1 already hit, 1.0 otherwise
+                        self._state["balance"] += pnl_exp + pos.get("margin_used", 0) * fraction_remaining
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), EXIT_EXPIRED))
@@ -566,7 +567,8 @@ class PaperTrader:
                 pos["exit_at"] = datetime.now(tz=_WIB).isoformat()
                 pos["exit_reason"] = "EXIT_EOD"
                 pos["partial"] = False
-                self._state["balance"] += pnl + pos.get("margin_used", 0)
+                # fraction_remaining already calculated above — 0.5 if TP1 hit, 1.0 otherwise
+                self._state["balance"] += pnl + pos.get("margin_used", 0) * fraction_remaining
                 self._state["closed_positions"].append(pos)
                 closed_list.append((pos, current_price))
                 logger.info(
