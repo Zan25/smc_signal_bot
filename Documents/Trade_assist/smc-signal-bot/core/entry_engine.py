@@ -549,6 +549,9 @@ def analyze_pair(
         "strategy_emoji": strategy["emoji"],
         "entry_tf": entry_tf,
         "flag_pattern": flag_info,                 # bear_flag/bull_flag if detected, else None
+        "paper_sizing": strategy.get("paper_sizing", "fixed"),
+        "paper_margin_pct": strategy.get("paper_margin_pct", 0.45),
+        "paper_risk_pct": strategy.get("paper_risk_pct", 0.02),
     }
 
     setups.append(setup)

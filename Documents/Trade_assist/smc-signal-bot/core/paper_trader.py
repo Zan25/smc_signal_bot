@@ -187,16 +187,23 @@ class PaperTrader:
 
             balance = self._state["balance"]
 
-            # Position sizing — fixed allocation: 1/3 balance per trade
             sl_dist_pct = abs(entry - sl) / entry
             if sl_dist_pct < 0.0001:
                 logger.warning(f"[PAPER] Skip {symbol}: SL distance too small ({sl_dist_pct:.4%})")
                 return None
 
-            # Fixed margin = 33% of balance per position → meaningful size
-            # With 10x leverage: $33 margin → $330 exposure
-            margin_used = balance * PAPER_MARGIN_PER_TRADE_PCT
-            margin_used = min(margin_used, balance * 0.50)        # hard cap 50% balance
+            if setup.get("paper_sizing") == "risk_based":
+                risk_pct = setup.get("paper_risk_pct", 0.02)
+                risk_usd = balance * risk_pct
+                exposure = risk_usd / sl_dist_pct
+                margin_used = exposure / PAPER_LEVERAGE
+                margin_used = max(margin_used, balance * 0.05)    # floor: 5% balance
+                margin_used = min(margin_used, balance * 0.40)    # ceiling: 40% balance
+            else:
+                margin_pct = setup.get("paper_margin_pct", PAPER_MARGIN_PER_TRADE_PCT)
+                margin_used = balance * margin_pct
+                margin_used = min(margin_used, balance * 0.50)    # hard cap 50% balance
+
             position_size_usd = margin_used * PAPER_LEVERAGE      # total exposure
             risk_amount = position_size_usd * sl_dist_pct         # actual $ risk
             qty = position_size_usd / entry
@@ -784,6 +791,9 @@ class PaperTrader:
             "created_at": now.isoformat(),
             "expires_at": (now + timedelta(hours=expiry_hours)).isoformat(),
             "status": "pending",
+            "paper_sizing": setup.get("paper_sizing", "fixed"),
+            "paper_margin_pct": setup.get("paper_margin_pct", PAPER_MARGIN_PER_TRADE_PCT),
+            "paper_risk_pct": setup.get("paper_risk_pct", 0.02),
         }
 
         pending_orders.append(order)
@@ -923,8 +933,18 @@ class PaperTrader:
             logger.warning(f"[PAPER] Pending {symbol}: SL distance too small")
             return None
 
-        margin_used = balance * PAPER_MARGIN_PER_TRADE_PCT
-        margin_used = min(margin_used, balance * 0.50)
+        if order.get("paper_sizing") == "risk_based":
+            risk_pct = order.get("paper_risk_pct", 0.02)
+            risk_usd = balance * risk_pct
+            exposure = risk_usd / sl_dist_pct
+            margin_used = exposure / PAPER_LEVERAGE
+            margin_used = max(margin_used, balance * 0.05)    # floor: 5% balance
+            margin_used = min(margin_used, balance * 0.40)    # ceiling: 40% balance
+        else:
+            margin_pct = order.get("paper_margin_pct", PAPER_MARGIN_PER_TRADE_PCT)
+            margin_used = balance * margin_pct
+            margin_used = min(margin_used, balance * 0.50)    # hard cap 50% balance
+
         position_size_usd = margin_used * PAPER_LEVERAGE
         risk_amount = position_size_usd * sl_dist_pct
         qty = position_size_usd / entry

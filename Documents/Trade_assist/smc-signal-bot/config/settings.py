@@ -127,6 +127,8 @@ STRATEGIES: list[dict] = [
         "min_sl_pct": 0.008,              # SL minimum 0.8% from entry
         "max_htf_conflicts": 1,           # swing is strict: max 1 TF conflict
         "max_24h_change_pct": 0.08,       # skip if coin moved >8% in last 24h (crash/spike guard)
+        "paper_sizing": "fixed",          # fixed % of balance per trade
+        "paper_margin_pct": 0.50,         # 50% balance → $50 × 10x = $500 exposure
     },
     {
         "name": "intraday",
@@ -146,6 +148,8 @@ STRATEGIES: list[dict] = [
         "min_sl_pct": 0.005,              # SL minimum 0.5% from entry
         "max_htf_conflicts": 2,           # bear flag: 4H bearish + 1H bullish + 15m bullish = 2 konflik = OK
         "max_24h_change_pct": 0.10,       # skip if coin moved >10% in last 24h (looser than swing)
+        "paper_sizing": "risk_based",     # size by risk amount, not fixed allocation
+        "paper_risk_pct": 0.02,           # max 2% balance risk per trade
     },
     {
         "name": "scalp",
