@@ -166,7 +166,8 @@ class TelegramCommandHandler:
 
             balance = status["balance"]
             initial = status["initial_balance"]
-            roi = (balance - initial) / initial * 100 if initial > 0 else 0.0
+            cumulative_pnl = status.get("cumulative_pnl", 0.0)
+            roi = cumulative_pnl / initial * 100 if initial > 0 else 0.0
             roi_sign = "+" if roi >= 0 else ""
             roi_emoji = "📈" if roi >= 0 else "📉"
             open_positions = state["open_positions"]
@@ -186,7 +187,7 @@ class TelegramCommandHandler:
                 "💼 *PAPER TRADING PORTFOLIO*",
                 "━━━━━━━━━━━━━━━━━━━━",
                 f"💰 Balance: *${balance:.2f}*",
-                f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (dari ${initial:.2f})",
+                f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (akumulasi P&L: {'+' if cumulative_pnl >= 0 else ''}${cumulative_pnl:.2f})",
                 f"📂 Posisi Aktif: {len(open_positions)} | Total Closed: {total_closed}",
             ]
 
