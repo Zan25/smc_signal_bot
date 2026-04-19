@@ -314,6 +314,7 @@ class PaperTrader:
                         pos["partial"] = False
                         # fraction_remaining = 0.5 if TP1 already hit, 1.0 otherwise
                         self._state["balance"] += pnl_exp + pos.get("margin_used", 0) * fraction_remaining
+                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pos["realized_pnl"]
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), EXIT_EXPIRED))
@@ -337,6 +338,7 @@ class PaperTrader:
                         pos["sl"] = entry  # move SL to breakeven
                         pos["sl_moved_to_be"] = True
                         self._state["balance"] += pnl_partial + pos.get("margin_used", 0) * 0.5
+                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pnl_partial
                         self._update_peak()
 
                         logger.info(
@@ -377,6 +379,7 @@ class PaperTrader:
                         pos["exit_reason"] = exit_reason
                         pos["partial"] = False
                         self._state["balance"] += pnl_final + pos.get("margin_used", 0) * 0.5
+                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pnl_final
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), exit_reason))
@@ -412,6 +415,7 @@ class PaperTrader:
                         pos["exit_reason"] = exit_reason
                         pos["partial"] = False
                         self._state["balance"] += pnl + pos.get("margin_used", 0)
+                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pnl
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), exit_reason))
@@ -485,8 +489,9 @@ class PaperTrader:
             current_balance = self._state["balance"]
             initial = self._state["initial_balance"]
             peak = self._state["peak_balance"]
+            cumulative_pnl = self._state.get("cumulative_pnl", 0.0)
 
-        roi = (current_balance - initial) / initial * 100 if initial > 0 else 0.0
+        roi = cumulative_pnl / initial * 100 if initial > 0 else 0.0
         # Max drawdown: from peak to current (simplified)
         max_dd = (peak - current_balance) / peak * 100 if peak > 0 else 0.0
 
@@ -495,6 +500,7 @@ class PaperTrader:
             "year": year,
             "current_balance": round(current_balance, 2),
             "initial_balance": round(initial, 2),
+            "cumulative_pnl": round(cumulative_pnl, 2),
             "roi": round(roi, 2),
             "total_trades": total_trades,
             "wins": wins,
@@ -511,9 +517,13 @@ class PaperTrader:
     def get_status(self) -> dict:
         """Return current portfolio status (for startup message or on-demand)."""
         with self._lock:
+            initial = self._state["initial_balance"]
+            cumulative_pnl = self._state.get("cumulative_pnl", 0.0)
             return {
                 "balance": round(self._state["balance"], 2),
-                "initial_balance": round(self._state["initial_balance"], 2),
+                "initial_balance": round(initial, 2),
+                "cumulative_pnl": round(cumulative_pnl, 2),
+                "roi": round(cumulative_pnl / initial * 100, 2) if initial > 0 else 0.0,
                 "open_positions": len(self._state["open_positions"]),
                 "total_closed": len(self._state["closed_positions"]),
                 "peak_balance": round(self._state["peak_balance"], 2),
@@ -576,6 +586,7 @@ class PaperTrader:
                 pos["partial"] = False
                 # fraction_remaining already calculated above — 0.5 if TP1 hit, 1.0 otherwise
                 self._state["balance"] += pnl + pos.get("margin_used", 0) * fraction_remaining
+                self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pos["realized_pnl"]
                 self._state["closed_positions"].append(pos)
                 closed_list.append((pos, current_price))
                 logger.info(
@@ -721,6 +732,7 @@ class PaperTrader:
                 "date": today.strftime("%d %b %Y"),
                 "balance": round(self._state["balance"], 2),
                 "initial_balance": round(self._state["initial_balance"], 2),
+                "cumulative_pnl": round(self._state.get("cumulative_pnl", 0.0), 2),
                 "total_opened_today": len(opened_today),
                 "total_closed_today": len(closed_today),
                 "open_positions": len(self._state["open_positions"]),
@@ -1034,6 +1046,11 @@ class PaperTrader:
                 state.setdefault("open_positions", [])
                 state.setdefault("closed_positions", [])
                 state.setdefault("pending_orders", [])
+                # Migration: compute cumulative_pnl from existing closed trades if missing
+                if "cumulative_pnl" not in state:
+                    state["cumulative_pnl"] = sum(
+                        p.get("exit_pnl", 0) for p in state.get("closed_positions", [])
+                    )
 
                 # Purge stale open positions (older than their max_duration)
                 now = datetime.now(tz=_WIB)
@@ -1083,6 +1100,7 @@ class PaperTrader:
             "balance": PAPER_INITIAL_BALANCE,
             "initial_balance": PAPER_INITIAL_BALANCE,
             "peak_balance": PAPER_INITIAL_BALANCE,
+            "cumulative_pnl": 0.0,
             "open_positions": [],
             "closed_positions": [],
             "pending_orders": [],

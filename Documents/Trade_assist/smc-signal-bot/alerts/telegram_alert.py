@@ -291,6 +291,7 @@ class TelegramAlerter:
 
         balance = stats["current_balance"]
         initial = stats["initial_balance"]
+        cumulative_pnl = stats.get("cumulative_pnl", 0.0)
         roi = stats["roi"]
         roi_sign = "+" if roi >= 0 else ""
         roi_emoji = "📈" if roi >= 0 else "📉"
@@ -312,8 +313,8 @@ class TelegramAlerter:
         msg = (
             f"📊 *PAPER TRADE RECAP — {month_name} {year}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Balance: *${balance:.2f}* (dari ${initial:.2f})\n"
-            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%*\n"
+            f"💰 Balance: *${balance:.2f}*\n"
+            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (akumulasi P&L: {'+' if cumulative_pnl >= 0 else ''}${cumulative_pnl:.2f})\n"
             f"\n"
             f"📋 *Statistik Bulan Ini:*\n"
             f"• Total Trade: {total}\n"
@@ -367,7 +368,8 @@ class TelegramAlerter:
         """Kirim ringkasan aktivitas trading harian jam 23:59 WIB."""
         balance = summary["balance"]
         initial = summary["initial_balance"]
-        roi = (balance - initial) / initial * 100 if initial > 0 else 0.0
+        cumulative_pnl = summary.get("cumulative_pnl", 0.0)
+        roi = cumulative_pnl / initial * 100 if initial > 0 else 0.0
         roi_sign = "+" if roi >= 0 else ""
         roi_emoji = "📈" if roi >= 0 else "📉"
 
@@ -399,7 +401,7 @@ class TelegramAlerter:
             f"📊 *RINGKASAN HARIAN — {summary['date']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💼 Balance: *${balance:.2f}*\n"
-            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (dari ${initial:.2f})\n"
+            f"{roi_emoji} ROI: *{roi_sign}{roi:.2f}%* (akumulasi P&L: {'+' if cumulative_pnl >= 0 else ''}${cumulative_pnl:.2f})\n"
             f"\n"
             f"📋 *Trade Hari Ini:*\n"
             f"• Total dibuka: {opened_today} posisi\n"
