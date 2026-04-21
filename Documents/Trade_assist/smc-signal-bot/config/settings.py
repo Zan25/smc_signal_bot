@@ -178,7 +178,7 @@ PAPER_MAX_POSITIONS: int = 3               # max 3 posisi concurrent (1 per dail
 PAPER_MAX_DAILY_TRADES: int = 4           # hard cap 4 trade per hari
 PAPER_MAX_PENDING: int = 2            # max pending limit orders at a time
 PAPER_MARGIN_PER_TRADE_PCT: float = 0.45  # 45% balance per posisi → $45 × 10x = $450 exposure
-PAPER_STATE_FILE: str = str(_BASE_DIR / "paper_state.json")
+PAPER_STATE_FILE: str = _get_env("PAPER_STATE_FILE", str(_BASE_DIR / "paper_state.json"))
 PAPER_FORCE_PAIRS: list[str] = [          # 10 pair utama untuk forced intraday scan
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
     "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",

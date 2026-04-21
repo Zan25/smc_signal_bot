@@ -1111,6 +1111,7 @@ class PaperTrader:
     def _save_state(self) -> None:
         """Persist state to JSON file (called inside lock)."""
         try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._state_path, "w", encoding="utf-8") as f:
                 json.dump(self._state, f, indent=2, default=str)
         except Exception as e:
