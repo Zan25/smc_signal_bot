@@ -314,7 +314,8 @@ class PaperTrader:
                         pos["partial"] = False
                         # fraction_remaining = 0.5 if TP1 already hit, 1.0 otherwise
                         self._state["balance"] += pnl_exp + pos.get("margin_used", 0) * fraction_remaining
-                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pos["realized_pnl"]
+                        # Only add NEW portion — TP1 partial (if any) was already added earlier
+                        self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pnl_exp
                         self._update_peak()
                         self._state["closed_positions"].append(pos)
                         exits.append((dict(pos), EXIT_EXPIRED))
@@ -586,7 +587,8 @@ class PaperTrader:
                 pos["partial"] = False
                 # fraction_remaining already calculated above — 0.5 if TP1 hit, 1.0 otherwise
                 self._state["balance"] += pnl + pos.get("margin_used", 0) * fraction_remaining
-                self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pos["realized_pnl"]
+                # Only add NEW portion — TP1 partial (if any) was already added earlier
+                self._state["cumulative_pnl"] = self._state.get("cumulative_pnl", 0.0) + pnl
                 self._state["closed_positions"].append(pos)
                 closed_list.append((pos, current_price))
                 logger.info(
