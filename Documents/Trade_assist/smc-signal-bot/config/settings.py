@@ -118,8 +118,11 @@ STRATEGIES: list[dict] = [
         "entry_tf": "15m",                 # user watches this TF for confirmation
         "pairs": SWING_PAIRS,
         "scan_interval_minutes": 15,
-        "min_confidence": 4,               # 3→4: require stronger confluence (score 3 = OB+FVG only, too weak)
-        "min_rr": 2.5,                     # 2.0→2.5: swing carries more overnight risk, need better reward
+        # Backtest evidence (365d, 105 trades, v1): WR 64.8%, +14.94R, PF 1.4.
+        # Higher scores (5+) actually LOSE in swing — score=4 is sweet spot. Keep v1.
+        # Filter analysis: no additional filter (RR>=3, score>=5, no_flag) improves total return.
+        "min_confidence": 4,
+        "min_rr": 2.5,
         "max_signals_per_scan": 3,
         "ob_fresh_lookback": 160,          # 4H×160 = ~27 days OB history
         "ob_approach_pct": 0.03,
@@ -127,8 +130,8 @@ STRATEGIES: list[dict] = [
         "min_sl_pct": 0.008,              # SL minimum 0.8% from entry
         "max_htf_conflicts": 1,           # swing is strict: max 1 TF conflict
         "max_24h_change_pct": 0.08,       # skip if coin moved >8% in last 24h (crash/spike guard)
-        "paper_sizing": "fixed",          # fixed % of balance per trade
-        "paper_margin_pct": 0.50,         # 50% balance → $50 × 10x = $500 exposure
+        "paper_sizing": "risk_based",     # 10x leverage → fixed margin too aggressive; size by risk amount
+        "paper_risk_pct": 0.015,          # 1.5% balance risk per trade
     },
     {
         "name": "intraday",
@@ -139,17 +142,22 @@ STRATEGIES: list[dict] = [
         "entry_tf": "5m",
         "pairs": INTRADAY_PAIRS,
         "scan_interval_minutes": 10,       # 5→10 menit: 12 pair × 3 TF butuh waktu, hindari job skip
+        # Backtest evidence (300d, 162 baseline trades, v1):
+        #   - Baseline: WR 51.9%, +2.7R, PF 1.06 (basically break-even)
+        #   - Filter min_rr=3.0 alone → 45 trades, WR 62.2%, +11.36R, PF 2.44, max DD -3.71R
+        #   - Filter min_rr=3.0 dominates ALL other filters tested (score, no_flag, weighted scoring)
+        # SINGLE CHANGE from baseline: min_rr 1.5 → 3.0
         "min_confidence": 3,
-        "min_rr": 1.5,
-        "ob_fresh_lookback": 168,          # 100→168: 1H×168 = 7 hari, OB bear flag tetap valid
-        "ob_approach_pct": 0.03,          # 2%→3%: lebih banyak approaching signal untuk major coins
+        "min_rr": 3.0,                    # v2: 1.5→3.0 (key edge — RR 3+ winners, RR<3 losers)
+        "ob_fresh_lookback": 168,
+        "ob_approach_pct": 0.03,
         "max_signals_per_scan": 3,
-        "ob_sl_buffer": 0.007,            # 0.7% buffer — 1H OBs
-        "min_sl_pct": 0.005,              # SL minimum 0.5% from entry
-        "max_htf_conflicts": 2,           # bear flag: 4H bearish + 1H bullish + 15m bullish = 2 konflik = OK
-        "max_24h_change_pct": 0.10,       # skip if coin moved >10% in last 24h (looser than swing)
-        "paper_sizing": "risk_based",     # size by risk amount, not fixed allocation
-        "paper_risk_pct": 0.02,           # max 2% balance risk per trade
+        "ob_sl_buffer": 0.007,
+        "min_sl_pct": 0.005,
+        "max_htf_conflicts": 2,           # restore to baseline (max_htf_conflicts=1 didn't help in data)
+        "max_24h_change_pct": 0.10,
+        "paper_sizing": "risk_based",
+        "paper_risk_pct": 0.015,          # 1.5% balance risk per trade
     },
     {
         "name": "scalp",

@@ -48,3 +48,10 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Backtest historical data (regeneratable via tools/fetch_history.py, ~17MB)
+backtest_data/
+
+# Local runtime state
+paper_state.json
+cooldown_state.json

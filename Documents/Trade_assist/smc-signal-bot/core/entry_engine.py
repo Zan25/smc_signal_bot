@@ -193,7 +193,7 @@ def analyze_pair(
                     f"{symbol}: 24h change {chg_24h*100:.1f}% > "
                     f"{max_24h_change*100:.0f}% — too volatile, skipping"
                 )
-                return setups
+                return []
 
     # ── 2. Market structure on all needed TFs ─────────────────────────────────
     structs = {tf: market_structure.analyze(mtf_data[tf]) for tf in needed_tfs}
@@ -333,44 +333,26 @@ def analyze_pair(
                 fvg_match = fv
                 break
 
-    # ── 8. Confluence scoring (0–6) ───────────────────────────────────────────
-    score = 0
-    score += 1  # TF alignment confirmed
-
-    # Zone bonus: long in discount (bottom 50%), short in premium (top 50%)
-    # Use 50%/50% midline — broader than previous 45%/55% which was too strict
-    # for coins in active trends that stay in upper/lower half of range
+    # ── 8. Confluence scoring ─────────────────────────────────────────────────
+    # Two scoring versions:
+    #   v1 (default): flat 1 point per factor (max 9)  — original
+    #   v2 (data-driven): weighted by backtest evidence (max 11) — recommended
+    # v2 changes: BOS=+2, CHoCH_entry=+2, OB+FVG_overlap=+2, flag bonus REMOVED
+    # (backtest showed flag pattern correlated with LOWER WR in intraday: 44% vs 53%)
+    scoring_version = strategy.get("scoring_version", "v1")
     pos = pd_result["position_pct"]
-    if is_long and pos < 50.0:
-        score += 1
-    elif not is_long and pos > 50.0:
-        score += 1
-
-    if ob_match is not None:
-        score += 1
-
-    if fvg_match is not None:
-        score += 1
 
     fvg_overlap = False
     if ob_match and fvg_match:
         ob_zone = (ob_match["zone_low"], ob_match["zone_high"])
         fv_zone = (fvg_match["zone_low"], fvg_match["zone_high"])
         fvg_overlap = fvg.zones_overlap(ob_zone, fv_zone)
-        if fvg_overlap:
-            score += 1
 
     liq_near, liq_target = liquidity.is_near_liquidity(current_price, liq_ob, htf_direction)
-    if liq_near:
-        score += 1
-
-    # BOS on ob_tf confirms momentum in trade direction
     bos_ob = struct_ob.get("last_bos")
-    if bos_ob and bos_ob.get("direction") == htf_direction:
-        score += 1
+    bos_aligned = bool(bos_ob and bos_ob.get("direction") == htf_direction)
 
-    # CHoCH on entry_tf = early reversal signal (price starting to reverse on lower TF)
-    # Checks entry_tf (e.g. 15m/5m) for first sign of smart money reversal in trade direction
+    # CHoCH check on entry_tf — early reversal signal in trade direction
     df_entry = mtf_data.get(entry_tf)
     struct_entry = None
     choch_entry_hit = False
@@ -378,14 +360,47 @@ def analyze_pair(
         struct_entry = market_structure.analyze(df_entry)
         choch_entry = struct_entry.get("last_choch")
         if choch_entry and choch_entry.get("direction") == htf_direction:
-            score += 1
             choch_entry_hit = True
 
-    # Flag pattern (bear/bull flag) = impulse + tight consolidation on ob_tf
-    # Detects patterns like the BTC bear flag: sharp sell-off + tight bounce = continuation
+    # Flag pattern detection (used for v1 score and v2 logging only — v2 doesn't add weight)
     flag_info = market_structure.detect_flag_pattern(df_ob, htf_direction)
-    if flag_info:
-        score += 1
+
+    if scoring_version == "v2":
+        score = 1  # TF alignment
+        if (is_long and pos < 50.0) or (not is_long and pos > 50.0):
+            score += 1
+        if ob_match is not None:
+            score += 1
+        if fvg_match is not None:
+            score += 1
+        if fvg_overlap:
+            score += 2  # was 1 in v1
+        if liq_near:
+            score += 1
+        if bos_aligned:
+            score += 2  # was 1 in v1
+        if choch_entry_hit:
+            score += 2  # was 1 in v1
+        # NOTE: flag_info bonus REMOVED in v2 (backtest evidence showed it hurts WR)
+    else:
+        # v1: flat scoring (legacy)
+        score = 1
+        if (is_long and pos < 50.0) or (not is_long and pos > 50.0):
+            score += 1
+        if ob_match is not None:
+            score += 1
+        if fvg_match is not None:
+            score += 1
+        if fvg_overlap:
+            score += 1
+        if liq_near:
+            score += 1
+        if bos_aligned:
+            score += 1
+        if choch_entry_hit:
+            score += 1
+        if flag_info:
+            score += 1
 
     logger.info(
         f"[{strategy['name'].upper()}] {symbol} {htf_direction.upper()}: "
