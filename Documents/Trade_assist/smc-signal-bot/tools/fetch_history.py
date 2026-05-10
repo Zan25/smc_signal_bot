@@ -22,8 +22,10 @@ CACHE_DIR.mkdir(exist_ok=True)
 PAGE_LIMIT = 1000
 
 PAIRS = [
+    # Full SWING_PAIRS (15) + DOGE which is in INTRADAY_PAIRS only
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
     "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
+    "TRX/USDT", "LTC/USDT", "BCH/USDT", "ATOM/USDT", "UNI/USDT", "APT/USDT",
 ]
 
 # Per-TF days back (Gate.io 10000-candle hard limit)

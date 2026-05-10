@@ -238,11 +238,10 @@ def _scan_strategy(strategy: dict) -> None:
     if PAPER_TRADING_ENABLED and _paper_trader is not None:
         btc_bias = _get_btc_bias()
 
-    # Alert policy: only send signal alert if paper_trader actually executes (or schedules pending).
-    # Reason: user wants "daging" signals only — no noise for setups that get rejected by
-    # daily limit, max positions, BTC bias, CE zone depth, etc.
-    # Fallback: if paper trading is OFF, alert ALL valid signals (no filter to gate against).
-    signals_sent = 0
+    # Alert policy: notifications ONLY for actionable trades (pending limit placed,
+    # entry filled, exit hit). Raw signal alerts (informational duplicates) removed —
+    # user only wants pings when the bot actually takes action.
+    actions_taken = 0
     for setup in top_setups:
         sym = setup["symbol"]
         direction = setup["direction"]
@@ -250,11 +249,11 @@ def _scan_strategy(strategy: dict) -> None:
         if PAPER_TRADING_ENABLED and _paper_trader is not None:
             # Pre-filter: BTC bias counter-trend
             if btc_bias == "bearish" and direction == "LONG":
-                logger.info(f"[ALERT] Skip {sym} LONG: BTC 4H bias bearish — no alert (would-be counter-trend)")
+                logger.info(f"[ALERT] Skip {sym} LONG: BTC 4H bias bearish — counter-trend")
                 _mark_cooldown(setup)
                 continue
             if btc_bias == "bullish" and direction == "SHORT":
-                logger.info(f"[ALERT] Skip {sym} SHORT: BTC 4H bias bullish — no alert (would-be counter-trend)")
+                logger.info(f"[ALERT] Skip {sym} SHORT: BTC 4H bias bullish — counter-trend")
                 _mark_cooldown(setup)
                 continue
 
@@ -266,34 +265,21 @@ def _scan_strategy(strategy: dict) -> None:
                 result = None
 
             if not result:
-                # Paper rejected (daily limit / max positions / CE zone / duplicate / etc) — no alert
-                logger.info(f"[ALERT] Skip {sym} {direction}: paper_trader rejected — no alert sent")
+                logger.info(f"[ALERT] Skip {sym} {direction}: paper_trader rejected — no notif")
                 _mark_cooldown(setup)
                 continue
 
-            # Paper accepted (open position OR pending limit order) — send signal alert
-            sent = _alerter.send_signal_alert(setup)
+            # Paper accepted — send actionable notification only
             _mark_cooldown(setup)
-            if sent:
-                signals_sent += 1
-
-            # Send paper-specific notification
             status = _paper_trader.get_status()
             result["balance_at_open"] = f"{status['balance']:.2f}"
             if result.get("status") == "pending":
                 _alerter.send_paper_pending(result)
             else:
                 _alerter.send_paper_entry(result)
-        else:
-            # Paper trading OFF: alert all valid signals (no execution gate)
-            sent = _alerter.send_signal_alert(setup)
-            _mark_cooldown(setup)
-            if sent:
-                signals_sent += 1
-            else:
-                logger.debug(f"[ALERT] Sinyal {sym} di-skip atau gagal dikirim ke Telegram")
+            actions_taken += 1
 
-    logger.info(f"=== [{strat_name}] Scan selesai — {signals_sent} sinyal dari {len(pairs)} pair ===")
+    logger.info(f"=== [{strat_name}] Scan selesai — {actions_taken} aksi dari {len(pairs)} pair ===")
 
 
 def scan_swing() -> None:

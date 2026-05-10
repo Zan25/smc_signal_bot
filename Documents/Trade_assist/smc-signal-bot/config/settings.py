@@ -124,7 +124,7 @@ STRATEGIES: list[dict] = [
         "min_confidence": 4,
         "min_rr": 2.5,
         "max_signals_per_scan": 3,
-        "ob_fresh_lookback": 160,          # 4H×160 = ~27 days OB history
+        "ob_fresh_lookback": 80,           # C2: 4H×80 = ~13 days OB history (fresher OBs)
         "ob_approach_pct": 0.03,
         "ob_sl_buffer": 0.010,            # 1.0% buffer — 4H OBs need more room than 1H
         "min_sl_pct": 0.008,              # SL minimum 0.8% from entry

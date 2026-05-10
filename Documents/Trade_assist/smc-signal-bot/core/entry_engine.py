@@ -285,6 +285,14 @@ def analyze_pair(
     # ob_approach_pct allows anticipatory signals (price near zone, not just inside it)
     # This lets us catch setups BEFORE price touches the zone — limit order style
     ob_approach_pct = strategy.get("ob_approach_pct", 0.02)
+    # Confirmation gate: require last closed entry_tf candle to CLOSE inside the OB zone.
+    # Filters wick-only touches that often precede liquidity-grab reversals.
+    require_entry_tf_confirm = strategy.get("require_entry_tf_confirmation", False)
+    df_entry_for_confirm = mtf_data.get(entry_tf) if require_entry_tf_confirm else None
+    # Deeper zone gate: require price to have penetrated at least N% into the OB zone.
+    # 0.5 = past midpoint (CE side), 0.0 = any touch (default).
+    min_zone_penetration = strategy.get("min_zone_penetration", 0.0)
+
     ob_match = None
     ob_approaching = False   # True if approaching but not yet inside zone
     for ob in ob_list:
@@ -293,6 +301,25 @@ def analyze_pair(
             continue
         # Check: price inside zone (with tight 0.5% tolerance)
         if order_blocks.is_price_in_ob(current_price, ob, tolerance=0.005):
+            # Confirmation: last entry_tf candle CLOSE must be inside zone (no wick-only)
+            if require_entry_tf_confirm:
+                if df_entry_for_confirm is None or len(df_entry_for_confirm) < 1:
+                    continue
+                last_close = float(df_entry_for_confirm["close"].iloc[-1])
+                if not (ob["zone_low"] <= last_close <= ob["zone_high"]):
+                    continue
+            # Deeper zone penetration gate
+            if min_zone_penetration > 0:
+                zone_size = ob["zone_high"] - ob["zone_low"]
+                if zone_size > 0:
+                    # For LONG (bullish OB): price should be in lower portion
+                    # penetration_from_top = how deep price came down into zone
+                    if is_long:
+                        penetration = (ob["zone_high"] - current_price) / zone_size
+                    else:
+                        penetration = (current_price - ob["zone_low"]) / zone_size
+                    if penetration < min_zone_penetration:
+                        continue
             ob_match = ob
             ob_approaching = False
             break
@@ -361,6 +388,13 @@ def analyze_pair(
         choch_entry = struct_entry.get("last_choch")
         if choch_entry and choch_entry.get("direction") == htf_direction:
             choch_entry_hit = True
+
+    # C4 gate: require BOS or CHoCH alignment as a hard precondition
+    # (instead of merely scoring +1 each in confluence)
+    if strategy.get("require_bos_or_choch", False):
+        if not (bos_aligned or choch_entry_hit):
+            logger.info(f"{symbol}: no BOS or CHoCH aligned — skipping (require_bos_or_choch)")
+            return setups
 
     # Flag pattern detection (used for v1 score and v2 logging only — v2 doesn't add weight)
     flag_info = market_structure.detect_flag_pattern(df_ob, htf_direction)
