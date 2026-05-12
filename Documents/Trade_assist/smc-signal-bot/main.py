@@ -212,18 +212,36 @@ def _scan_strategy(strategy: dict) -> None:
     max_signals = strategy.get("max_signals_per_scan", 3)
     logger.info(f"=== [{strat_name}] Scan dimulai ({len(pairs)} pair, parallel) ===")
 
-    # Collect all valid setups from parallel scan
+    # Collect all valid setups from parallel scan.
+    # NOTE: do NOT use `with ThreadPoolExecutor()` here — context manager blocks
+    # on __exit__ until ALL workers finish. If one pair's API call hangs, the
+    # whole scheduler freezes. Use explicit shutdown with overall timeout.
     all_setups: list[dict] = []
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan") as executor:
+    # Overall scan timeout: 2× scan_interval safety margin
+    scan_timeout_s = max(180, strategy.get("scan_interval_minutes", 15) * 60 - 30)
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan")
+    try:
         futures = {
             executor.submit(_scan_pair, sym, perp, strategy): sym
             for sym, perp in zip(pairs, perp_pairs)
         }
-        for future in as_completed(futures):
-            _, setups = future.result()
-            for setup in setups:
-                if not _is_on_cooldown(setup):
-                    all_setups.append(setup)
+        try:
+            for future in as_completed(futures, timeout=scan_timeout_s):
+                try:
+                    _, setups = future.result(timeout=5)
+                    for setup in setups:
+                        if not _is_on_cooldown(setup):
+                            all_setups.append(setup)
+                except Exception as pe:
+                    logger.error(f"[{strat_name}] pair task failed: {pe}")
+        except FuturesTimeoutError:
+            done_count = sum(1 for f in futures if f.done())
+            logger.error(
+                f"[{strat_name}] scan timeout after {scan_timeout_s}s — "
+                f"{done_count}/{len(futures)} pairs done, abandoning rest"
+            )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # Sort by confidence score (desc), take top-N only
     all_setups.sort(key=lambda s: s.get("confidence", 0), reverse=True)
@@ -313,14 +331,21 @@ def check_paper_positions() -> None:
             else:
                 _alerter.send_paper_exit(pos, reason)
 
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_inner)
-        try:
-            future.result(timeout=50)
-        except FuturesTimeoutError:
-            logger.error("[PAPER] check_positions timed out after 50s — skipping this cycle")
-        except Exception as e:
-            logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
+    # NOTE: do NOT use `with ThreadPoolExecutor()` — context manager blocks on
+    # __exit__ until inner thread finishes. If Gate.io API hangs, scheduler
+    # freezes forever. Manage executor manually so we can abandon hung threads.
+    ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ppc")
+    future = ex.submit(_inner)
+    try:
+        future.result(timeout=50)
+    except FuturesTimeoutError:
+        logger.error("[PAPER] check_positions timed out after 50s — abandoning thread")
+    except Exception as e:
+        logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
+    finally:
+        # wait=False: don't block scheduler waiting for hung thread to finish.
+        # Hung thread will eventually die when its socket times out (45s).
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def eod_close_positions() -> None:
