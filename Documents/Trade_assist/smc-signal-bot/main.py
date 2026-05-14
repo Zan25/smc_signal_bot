@@ -200,6 +200,11 @@ def _get_btc_bias(threshold_pct: float = 0.025) -> str:
         return "neutral"
 
 
+# Module-level scan executor. Reused across all scan jobs to keep total worker
+# count bounded — prevents thread accumulation if individual pair tasks hang.
+_scan_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan")
+
+
 def _scan_strategy(strategy: dict) -> None:
     """Scan all pairs for a given strategy in parallel (4 workers).
 
@@ -213,35 +218,35 @@ def _scan_strategy(strategy: dict) -> None:
     logger.info(f"=== [{strat_name}] Scan dimulai ({len(pairs)} pair, parallel) ===")
 
     # Collect all valid setups from parallel scan.
-    # NOTE: do NOT use `with ThreadPoolExecutor()` here — context manager blocks
-    # on __exit__ until ALL workers finish. If one pair's API call hangs, the
-    # whole scheduler freezes. Use explicit shutdown with overall timeout.
+    # Reuse module-level scan executor (see _scan_executor) — fresh executors
+    # per call leak threads if any worker hangs. Module-level executor keeps
+    # worker count bounded (max_workers=4) regardless of hung threads.
     all_setups: list[dict] = []
-    # Overall scan timeout: 2× scan_interval safety margin
     scan_timeout_s = max(180, strategy.get("scan_interval_minutes", 15) * 60 - 30)
-    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scan")
+    futures = {
+        _scan_executor.submit(_scan_pair, sym, perp, strategy): sym
+        for sym, perp in zip(pairs, perp_pairs)
+    }
     try:
-        futures = {
-            executor.submit(_scan_pair, sym, perp, strategy): sym
-            for sym, perp in zip(pairs, perp_pairs)
-        }
-        try:
-            for future in as_completed(futures, timeout=scan_timeout_s):
-                try:
-                    _, setups = future.result(timeout=5)
-                    for setup in setups:
-                        if not _is_on_cooldown(setup):
-                            all_setups.append(setup)
-                except Exception as pe:
-                    logger.error(f"[{strat_name}] pair task failed: {pe}")
-        except FuturesTimeoutError:
-            done_count = sum(1 for f in futures if f.done())
-            logger.error(
-                f"[{strat_name}] scan timeout after {scan_timeout_s}s — "
-                f"{done_count}/{len(futures)} pairs done, abandoning rest"
-            )
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        for future in as_completed(futures, timeout=scan_timeout_s):
+            try:
+                _, setups = future.result(timeout=5)
+                for setup in setups:
+                    if not _is_on_cooldown(setup):
+                        all_setups.append(setup)
+            except Exception as pe:
+                logger.error(f"[{strat_name}] pair task failed: {pe}")
+    except FuturesTimeoutError:
+        done_count = sum(1 for f in futures if f.done())
+        logger.error(
+            f"[{strat_name}] scan timeout after {scan_timeout_s}s — "
+            f"{done_count}/{len(futures)} pairs done, abandoning rest"
+        )
+        # Cancel pending futures so they don't run after we leave this scope.
+        # Already-running futures will continue but stay capped by max_workers.
+        for f, _sym in futures.items():
+            if not f.done():
+                f.cancel()
 
     # Sort by confidence score (desc), take top-N only
     all_setups.sort(key=lambda s: s.get("confidence", 0), reverse=True)
@@ -312,11 +317,24 @@ def scan_scalp() -> None:
     _scan_strategy(next(s for s in STRATEGIES if s["name"] == "scalp"))
 
 
+_ppc_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ppc")
+_ppc_current_future = None
+
+
 def check_paper_positions() -> None:
     """Check open paper trade positions against current prices. Runs every minute.
-    Wrapped with 50s hard timeout to prevent API hangs from freezing the scheduler.
+
+    Uses a module-level single-worker executor to prevent thread leaks. If a
+    previous run is still in flight (e.g. API hang), this iteration skips
+    instead of spawning a new thread — no leak accumulation.
     """
+    global _ppc_current_future
     if not PAPER_TRADING_ENABLED or _paper_trader is None:
+        return
+
+    # Skip if previous run still busy (don't spawn new thread → no leak)
+    if _ppc_current_future is not None and not _ppc_current_future.done():
+        logger.warning("[PAPER] previous check still running — skipping this tick")
         return
 
     def _inner():
@@ -331,21 +349,13 @@ def check_paper_positions() -> None:
             else:
                 _alerter.send_paper_exit(pos, reason)
 
-    # NOTE: do NOT use `with ThreadPoolExecutor()` — context manager blocks on
-    # __exit__ until inner thread finishes. If Gate.io API hangs, scheduler
-    # freezes forever. Manage executor manually so we can abandon hung threads.
-    ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ppc")
-    future = ex.submit(_inner)
     try:
-        future.result(timeout=50)
+        _ppc_current_future = _ppc_executor.submit(_inner)
+        _ppc_current_future.result(timeout=50)
     except FuturesTimeoutError:
-        logger.error("[PAPER] check_positions timed out after 50s — abandoning thread")
+        logger.error("[PAPER] check_positions timed out after 50s — will skip next ticks until thread dies")
     except Exception as e:
         logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
-    finally:
-        # wait=False: don't block scheduler waiting for hung thread to finish.
-        # Hung thread will eventually die when its socket times out (45s).
-        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def eod_close_positions() -> None:
