@@ -90,6 +90,8 @@ class TelegramCommandHandler:
 
         if text.startswith("/porto"):
             self._send_porto(chat_id)
+        elif text.startswith("/reset"):
+            self._handle_reset(chat_id, text)
         elif text.startswith("/price"):
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
@@ -151,6 +153,44 @@ class TelegramCommandHandler:
             requests.post(f"{self._api}/sendMessage", json=payload, timeout=10)
         except Exception as e:
             logger.warning(f"Failed to send keyboard: {e}")
+
+    # ── Reset handler ──────────────────────────────────────────────────────────
+
+    def _handle_reset(self, chat_id: int, text: str) -> None:
+        """Reset paper trading state. Requires `/reset confirm` to actually wipe."""
+        if self._paper_trader is None:
+            self._send(chat_id, "Paper trading tidak aktif.")
+            return
+
+        if "confirm" not in text.lower():
+            self._send(
+                chat_id,
+                "⚠️ *RESET PAPER TRADING STATE*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Ini akan menghapus _SEMUA_:\n"
+                "• Balance kembali ke $100\n"
+                "• Open positions: dihapus\n"
+                "• Closed positions: dihapus\n"
+                "• Pending orders: dihapus\n"
+                "• Cumulative PnL: reset ke 0\n\n"
+                "Tidak bisa di-undo. Ketik `/reset confirm` untuk eksekusi.",
+            )
+            return
+
+        try:
+            summary = self._paper_trader.reset_state()
+            self._send(
+                chat_id,
+                f"✅ *RESET SUKSES*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Balance: ${summary['old_balance']:.2f} → ${summary['new_balance']:.2f}\n"
+                f"Wiped: {summary['wiped_open']} open, {summary['wiped_closed']} closed, "
+                f"{summary['wiped_pending']} pending\n"
+                f"Cumulative PnL: $0.00",
+            )
+        except Exception as e:
+            logger.error(f"Error during reset: {e}", exc_info=True)
+            self._send(chat_id, f"❌ Reset gagal: {e}")
 
     # ── Portfolio status ───────────────────────────────────────────────────────
 

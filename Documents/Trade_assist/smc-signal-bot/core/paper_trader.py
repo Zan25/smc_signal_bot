@@ -515,6 +515,38 @@ class PaperTrader:
             "open_positions": len(self._state["open_positions"]),
         }
 
+    def reset_state(self) -> dict:
+        """Reset paper trading state: balance kembali ke initial, hapus semua
+        open/closed/pending positions. Snapshot dikembalikan untuk konfirmasi.
+        """
+        with self._lock:
+            old_balance = self._state.get("balance", 0)
+            old_closed = len(self._state.get("closed_positions", []))
+            old_open = len(self._state.get("open_positions", []))
+            old_pending = len(self._state.get("pending_orders", []))
+
+            self._state = {
+                "balance": PAPER_INITIAL_BALANCE,
+                "initial_balance": PAPER_INITIAL_BALANCE,
+                "peak_balance": PAPER_INITIAL_BALANCE,
+                "cumulative_pnl": 0.0,
+                "open_positions": [],
+                "closed_positions": [],
+                "pending_orders": [],
+            }
+            self._save_state()
+            logger.warning(
+                f"[PAPER] STATE RESET — wiped {old_open} open / {old_closed} closed / "
+                f"{old_pending} pending. Balance ${old_balance:.2f} → ${PAPER_INITIAL_BALANCE:.2f}"
+            )
+            return {
+                "wiped_open": old_open,
+                "wiped_closed": old_closed,
+                "wiped_pending": old_pending,
+                "old_balance": round(old_balance, 2),
+                "new_balance": PAPER_INITIAL_BALANCE,
+            }
+
     def get_status(self) -> dict:
         """Return current portfolio status (for startup message or on-demand)."""
         with self._lock:
