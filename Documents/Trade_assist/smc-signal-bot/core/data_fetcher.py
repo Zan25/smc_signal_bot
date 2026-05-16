@@ -1,9 +1,10 @@
 """
-Data fetcher module - fetches OHLCV market data from Bybit via ccxt public API.
+Data fetcher module - fetches OHLCV market data from Gate.io via ccxt public API.
 No API key required for market data.
 """
 
 import time
+import threading
 import pandas as pd
 import numpy as np
 import ccxt
@@ -27,13 +28,33 @@ class DataFetcher:
     """Fetches OHLCV candle data from Gate.io USDT perpetual futures via ccxt public endpoints."""
 
     def __init__(self):
-        self._exchange: ccxt.gate = get_exchange()
-        # Pre-load markets once so OHLCV calls don't trigger auto market loading per request
+        # ccxt exchange objects are NOT thread-safe — sharing one across the
+        # scan workers + paper-position-check thread + bias check corrupts the
+        # internal HTTP session / rate-limiter state and causes permanent hangs.
+        # Each thread gets its own exchange instance via thread-local storage.
+        self._tls = threading.local()
+        # Warm up the main-thread instance so startup logs a sane message.
         try:
-            self._exchange.load_markets()
-            logger.info(f"DataFetcher initialized — {len(self._exchange.markets)} Gate.io swap markets loaded")
+            ex = self._get_exchange()
+            logger.info(f"DataFetcher initialized — {len(ex.markets)} Gate.io swap markets loaded")
         except Exception as e:
             logger.warning(f"Market pre-load failed (will retry on first fetch): {e}")
+
+    def _get_exchange(self) -> ccxt.gate:
+        """Return a ccxt exchange instance unique to the calling thread.
+
+        Lazily creates + loads markets on first access per thread. This avoids
+        all cross-thread state corruption in ccxt.
+        """
+        ex = getattr(self._tls, "exchange", None)
+        if ex is None:
+            ex = get_exchange()
+            try:
+                ex.load_markets()
+            except Exception as e:
+                logger.warning(f"Market load failed for thread exchange: {e}")
+            self._tls.exchange = ex
+        return ex
 
     def fetch_ohlcv(
         self,
@@ -60,7 +81,7 @@ class DataFetcher:
             if delay:
                 time.sleep(delay)
             try:
-                raw = self._exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                raw = self._get_exchange().fetch_ohlcv(symbol, timeframe, limit=limit)
                 if not raw:
                     logger.warning(f"Empty response for {symbol} {timeframe}")
                     return None
@@ -140,7 +161,7 @@ class DataFetcher:
             Last traded price as float, or None on failure.
         """
         try:
-            ticker = self._exchange.fetch_ticker(symbol)
+            ticker = self._get_exchange().fetch_ticker(symbol)
             price = ticker.get("last") or ticker.get("close")
             if price is not None:
                 return float(price)
