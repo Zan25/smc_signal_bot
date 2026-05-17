@@ -56,6 +56,48 @@ _scheduler: BlockingScheduler | None = None
 _cmd_handler: TelegramCommandHandler | None = None
 _paper_trader: PaperTrader | None = None
 
+# ── Watchdog ────────────────────────────────────────────────────────────────────
+# Python threads can hang permanently inside a stuck network call and CANNOT be
+# force-killed. If a scan or position-check thread hangs, the bot effectively
+# dies. The only robust recovery is to exit the process so Railway restarts it.
+# Two heartbeats — scan completion and paper-check completion — are tracked
+# independently; the watchdog exits if EITHER goes stale.
+import time as _time
+_hb_lock = threading.Lock()
+_hb_scan: float = _time.time()    # bumped when a scan cycle completes
+_hb_check: float = _time.time()   # bumped when check_paper_positions completes
+SCAN_STALE_S = 1500    # 25 min — swing scan interval is 15 min
+CHECK_STALE_S = 900    # 15 min — paper check interval is 1 min
+
+
+def _bump_scan_hb() -> None:
+    global _hb_scan
+    with _hb_lock:
+        _hb_scan = _time.time()
+
+
+def _bump_check_hb() -> None:
+    global _hb_check
+    with _hb_lock:
+        _hb_check = _time.time()
+
+
+def _watchdog_loop() -> None:
+    """Daemon thread: force-exit the process if scans or checks stop completing."""
+    import os
+    while True:
+        _time.sleep(60)
+        now = _time.time()
+        with _hb_lock:
+            scan_stale = now - _hb_scan
+            check_stale = now - _hb_check
+        if scan_stale > SCAN_STALE_S or check_stale > CHECK_STALE_S:
+            logger.error(
+                f"[WATCHDOG] STUCK — scan stale {scan_stale/60:.1f}min, "
+                f"check stale {check_stale/60:.1f}min — force-exiting for Railway restart"
+            )
+            os._exit(1)  # hard exit — bypasses hung threads; Railway restarts container
+
 # ── Signal cooldown tracking ────────────────────────────────────────────────────
 # Prevents the same pair+direction from spamming every scan cycle.
 # Key: "{symbol}_{direction}" (cross-strategy), Value: (ISO timestamp, strategy_name)
@@ -303,6 +345,7 @@ def _scan_strategy(strategy: dict) -> None:
             actions_taken += 1
 
     logger.info(f"=== [{strat_name}] Scan selesai — {actions_taken} aksi dari {len(pairs)} pair ===")
+    _bump_scan_hb()  # signal watchdog the scan path is alive
 
 
 def scan_swing() -> None:
@@ -352,10 +395,12 @@ def check_paper_positions() -> None:
     try:
         _ppc_current_future = _ppc_executor.submit(_inner)
         _ppc_current_future.result(timeout=50)
+        _bump_check_hb()  # completed cleanly — signal watchdog
     except FuturesTimeoutError:
         logger.error("[PAPER] check_positions timed out after 50s — will skip next ticks until thread dies")
     except Exception as e:
         logger.error(f"[PAPER] Error checking positions: {e}", exc_info=True)
+        _bump_check_hb()  # errored but returned — path not hung, still alive
 
 
 def eod_close_positions() -> None:
@@ -621,6 +666,16 @@ def main() -> None:
 
     # Start health check HTTP server (port 8080 for Railway uptime monitoring)
     _start_health_server(port=8080)
+
+    # Start watchdog — auto-restart if a scan thread hangs (Python can't kill
+    # hung threads; only a process exit recovers). Daemon so it dies with main.
+    _bump_scan_hb()
+    _bump_check_hb()
+    threading.Thread(target=_watchdog_loop, name="watchdog", daemon=True).start()
+    logger.info(
+        f"  🐕 Watchdog active — restart if scan stale >{SCAN_STALE_S//60}min "
+        f"or paper-check stale >{CHECK_STALE_S//60}min"
+    )
 
     # Run the first scan immediately — scalp disabled, only swing + intraday
     for fn, name in [(scan_swing, "swing"), (scan_intraday, "intraday"),
