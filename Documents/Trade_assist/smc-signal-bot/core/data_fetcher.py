@@ -28,33 +28,21 @@ class DataFetcher:
     """Fetches OHLCV candle data from Gate.io USDT perpetual futures via ccxt public endpoints."""
 
     def __init__(self):
-        # ccxt exchange objects are NOT thread-safe — sharing one across the
-        # scan workers + paper-position-check thread + bias check corrupts the
-        # internal HTTP session / rate-limiter state and causes permanent hangs.
-        # Each thread gets its own exchange instance via thread-local storage.
-        self._tls = threading.local()
-        # Warm up the main-thread instance so startup logs a sane message.
+        # ccxt exchange objects are NOT thread-safe (shared HTTP session +
+        # rate-limiter state can corrupt under concurrent access). Previous fix
+        # used thread-local instances but that loaded markets per-thread (~50MB
+        # each × 6 threads = ~300MB extra RAM, which blew up Railway memory
+        # billing). Current approach: ONE shared instance + lock that
+        # serializes every ccxt call. Slightly slower (calls sequential) but
+        # massively cheaper memory-wise and just as safe.
+        self._exchange: ccxt.gate = get_exchange()
+        self._lock = threading.Lock()
         try:
-            ex = self._get_exchange()
-            logger.info(f"DataFetcher initialized — {len(ex.markets)} Gate.io swap markets loaded")
+            with self._lock:
+                self._exchange.load_markets()
+            logger.info(f"DataFetcher initialized — {len(self._exchange.markets)} Gate.io swap markets loaded")
         except Exception as e:
             logger.warning(f"Market pre-load failed (will retry on first fetch): {e}")
-
-    def _get_exchange(self) -> ccxt.gate:
-        """Return a ccxt exchange instance unique to the calling thread.
-
-        Lazily creates + loads markets on first access per thread. This avoids
-        all cross-thread state corruption in ccxt.
-        """
-        ex = getattr(self._tls, "exchange", None)
-        if ex is None:
-            ex = get_exchange()
-            try:
-                ex.load_markets()
-            except Exception as e:
-                logger.warning(f"Market load failed for thread exchange: {e}")
-            self._tls.exchange = ex
-        return ex
 
     def fetch_ohlcv(
         self,
@@ -81,7 +69,8 @@ class DataFetcher:
             if delay:
                 time.sleep(delay)
             try:
-                raw = self._get_exchange().fetch_ohlcv(symbol, timeframe, limit=limit)
+                with self._lock:
+                    raw = self._exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
                 if not raw:
                     logger.warning(f"Empty response for {symbol} {timeframe}")
                     return None
@@ -161,7 +150,8 @@ class DataFetcher:
             Last traded price as float, or None on failure.
         """
         try:
-            ticker = self._get_exchange().fetch_ticker(symbol)
+            with self._lock:
+                ticker = self._exchange.fetch_ticker(symbol)
             price = ticker.get("last") or ticker.get("close")
             if price is not None:
                 return float(price)
