@@ -1,0 +1,31 @@
+# Local-only backtest data + results (27MB) — bot doesn't need these in prod
+backtest_data/
+backtest_results/
+
+# Local logs
+logs/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Tests
+tests/
+
+# Git + IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Local state files (production uses Railway Volume)
+paper_state.json
+*.log
+
+# Markdown docs
+README.md
+*.md
